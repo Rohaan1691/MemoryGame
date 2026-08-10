@@ -2,6 +2,7 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:memorygame/network/routes.dart';
 import 'package:memorygame/providers/game_provider.dart';
+import 'package:memorygame/services/auth_service.dart';
 import 'package:memorygame/utils/app_utils.dart';
 import 'package:memorygame/utils/custom_audios.dart';
 import 'package:memorygame/utils/custom_colors.dart';
@@ -143,6 +144,37 @@ class _MainScreenState extends State<MainScreen> {
                   ),
                 ),
               ],
+            ),
+          ),
+          // Profile / sign-in entry point. Overlaid so the existing centred
+          // layout above is unchanged.
+          Padding(
+            padding: const EdgeInsets.all(20),
+            child: Align(
+              alignment: Alignment.topRight,
+              child: InkWell(
+                onTap: () {
+                  audioPlayer.stop();
+                  final auth = Provider.of<AuthService>(context, listen: false);
+                  AppUtils.pushNamed(
+                    context,
+                    auth.isSignedIn
+                        ? Routes.profileScreen
+                        : Routes.loginScreen,
+                  );
+                },
+                child: Container(
+                  width: 50,
+                  height: 50,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: blue,
+                    borderRadius: const BorderRadius.all(Radius.circular(15)),
+                    border: Border.all(color: lightGrey, width: 2),
+                  ),
+                  child: const Text('👤', style: TextStyle(fontSize: 22)),
+                ),
+              ),
             ),
           ),
         ],

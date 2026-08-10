@@ -9,6 +9,7 @@ import 'package:memorygame/models/game_card_model/game_card_model.dart';
 import 'package:memorygame/network/routes.dart';
 import 'package:memorygame/providers/game_provider.dart';
 import 'package:memorygame/screens/rps/rps.dart';
+import 'package:memorygame/services/profile_service.dart';
 import 'package:memorygame/utils/app_utils.dart';
 import 'package:memorygame/utils/constants.dart';
 import 'package:memorygame/utils/custom_audios.dart';
@@ -40,10 +41,40 @@ class _GameScreenState extends State<GameScreen>
   final List<GameCardModel> _cpuMemory = [];
   bool _isDisposed = false;
 
+  /// Guards score recording so a finished game is counted exactly once.
+  /// checkGameCompleted can be re-entered after the RPS tiebreaker resolves.
+  bool _resultRecorded = false;
+
+  /// Captured in initState so the end-of-game write never needs a BuildContext
+  /// after an await.
+  ProfileService? _profileService;
+
+  /// Records the finished game against the signed-in account.
+  ///
+  /// The signed-in user is treated as Player 1, so a P1 win is a win and a P2
+  /// (or CPU) win is a loss. Recorded in both VS CPU and two-player modes.
+  /// Silently does nothing when signed out, and never surfaces an error — a
+  /// game ending must not interrupt the player.
+  void _recordGameResultOnce(GameProvider provider) {
+    if (_resultRecorded) return;
+    _resultRecorded = true;
+
+    final service = _profileService;
+    if (service == null) return;
+
+    final bool player1Won = provider.streakPlayer == Constants.player1;
+    final String difficulty = Difficulties.fromMode(provider.difficultyMode);
+
+    unawaited(
+      service.recordResult(difficulty: difficulty, won: player1Won),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _profileService = Provider.of<ProfileService>(context, listen: false);
     _rotationController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 1),
@@ -953,6 +984,7 @@ class _GameScreenState extends State<GameScreen>
         if (!fromTieBreaker) {
           await Future.delayed(Duration(milliseconds: 1000));
         }
+        _recordGameResultOnce(provider);
         checkWinStreaks(winnerText, provider, fromTieBreaker);
       }
     }
@@ -1380,6 +1412,7 @@ class _GameScreenState extends State<GameScreen>
     GameProvider provider = Provider.of<GameProvider>(context, listen: false);
 
     _cpuMemory.clear();
+    _resultRecorded = false;
     provider.setFirstCard(null);
     provider.setSecondCard(null);
     provider.setIsChecking(false);

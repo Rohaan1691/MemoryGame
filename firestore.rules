@@ -1,0 +1,57 @@
+rules_version = '2';
+
+// Security rules for MultiMatch Flag Challenge.
+//
+// Data model: users/{uid} holds a player's profile and their per-difficulty
+// win/loss counters.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /users/{userId} {
+
+      // Any signed-in user may read any profile. This is deliberate so a
+      // future friends list or leaderboard can display other players' names
+      // and records without a rules change.
+      allow read: if request.auth != null;
+
+      // Only the owner may create, update or delete their own document.
+      allow create: if request.auth != null
+                    && request.auth.uid == userId;
+
+      allow update: if request.auth != null
+                    && request.auth.uid == userId;
+
+      allow delete: if request.auth != null
+                    && request.auth.uid == userId;
+
+      // NOTE ON SCORE INTEGRITY
+      //
+      // The stats.{easy|medium|hard}.{wins|losses} counters are written
+      // directly by the client, because the owner has full update rights on
+      // their own document. A determined user could therefore write arbitrary
+      // values and inflate their record.
+      //
+      // This is accepted for now: scores are personal progress only and are
+      // not ranked against other players.
+      //
+      // If a competitive leaderboard is ever added, this becomes exploitable
+      // and the counters must stop being client-writable. The fix is to move
+      // score mutation behind a Cloud Function (callable, invoked at game end
+      // and validating the result server-side), then tighten this rule so the
+      // client can no longer touch the stats map, e.g.:
+      //
+      //   allow update: if request.auth != null
+      //                 && request.auth.uid == userId
+      //                 && !request.resource.data.diff(resource.data)
+      //                      .affectedKeys().hasAny(['stats']);
+      //
+      // with the Cloud Function writing stats via the Admin SDK, which
+      // bypasses these rules.
+    }
+
+    // Deny everything not explicitly matched above.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

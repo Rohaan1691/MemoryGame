@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:memorygame/network/routes.dart';
 import 'package:memorygame/screens/difficulty/difficult.dart';
 import 'package:memorygame/screens/game_screen/game_screen.dart';
+import 'package:memorygame/screens/login_screen.dart';
 import 'package:memorygame/screens/main_screen/main_screen.dart';
+import 'package:memorygame/screens/profile_screen.dart';
 import 'package:memorygame/screens/rps/rps.dart';
 import 'package:memorygame/screens/splash/splash.dart';
 
@@ -39,6 +41,16 @@ class _MyAppState extends State<MyApp> {
         } else if (settings.name == Routes.gameScreen) {
           return MaterialPageRoute(
             builder: (context) => const GameScreen(),
+            settings: RouteSettings(arguments: settings.arguments),
+          );
+        } else if (settings.name == Routes.loginScreen) {
+          return MaterialPageRoute(
+            builder: (context) => const LoginScreen(),
+            settings: RouteSettings(arguments: settings.arguments),
+          );
+        } else if (settings.name == Routes.profileScreen) {
+          return MaterialPageRoute(
+            builder: (context) => const ProfileScreen(),
             settings: RouteSettings(arguments: settings.arguments),
           );
         } else {

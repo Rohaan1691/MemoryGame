@@ -1,8 +1,14 @@
+import 'dart:async';
+import 'dart:developer' as developer;
+
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:memorygame/network/routes.dart';
+import 'package:memorygame/services/auth_service.dart';
 import 'package:memorygame/utils/app_utils.dart';
 import 'package:memorygame/utils/custom_colors.dart';
 import 'package:memorygame/utils/custom_images.dart';
+import 'package:provider/provider.dart';
 
 class Splash extends StatefulWidget {
   const Splash({super.key});
@@ -12,11 +18,37 @@ class Splash extends StatefulWidget {
 }
 
 class _SplashState extends State<Splash> {
+  StreamSubscription<User?>? _authSub;
+  User? _user;
+
   @override
   void initState() {
     super.initState();
     AppUtils.statusBarNavigationBar(0, Brightness.dark);
-    Future.delayed(Duration(seconds: 3), moveToMainScreen);
+
+    // Resolve auth state during the existing 3 second splash. The wait itself
+    // is unchanged; only the destination now depends on the result.
+    final auth = context.read<AuthService>();
+    unawaited(auth.init());
+    _authSub = auth.authStateChanges().listen(
+      (user) => _user = user,
+      onError: (Object error, StackTrace stack) {
+        developer.log(
+          'authStateChanges error during splash',
+          name: 'Splash',
+          error: error,
+          stackTrace: stack,
+        );
+      },
+    );
+
+    Future.delayed(Duration(seconds: 3), moveToNextScreen);
+  }
+
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    super.dispose();
   }
 
   @override
@@ -62,7 +94,11 @@ class _SplashState extends State<Splash> {
     );
   }
 
-  void moveToMainScreen() {
-    AppUtils.popAndPushNamed(context, Routes.main);
+  void moveToNextScreen() {
+    if (!mounted) return;
+    AppUtils.popAndPushNamed(
+      context,
+      _user != null ? Routes.main : Routes.loginScreen,
+    );
   }
 }
