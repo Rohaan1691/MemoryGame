@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "589974754114",
+    "project_id": "multimatch-flag-challenge",
+    "storage_bucket": "multimatch-flag-challenge.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:589974754114:android:1253e54ef2be5295082edb",
+        "android_client_info": {
+          "package_name": "com.worldflag.memorygame"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "589974754114-mto194m3b8r4o1g78ijvv79ksbce5mmi.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.worldflag.memorygame",
+            "certificate_hash": "0d044c9e2ca05a63c2ee6012cc9496b9cee0e39a"
+          }
+        },
+        {
+          "client_id": "589974754114-ia3updo2p26kqt2opmpvj3dimlp9h3u1.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCG__8HbTsSjMeT6v6b1uFRys5F-yNsux4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "589974754114-ia3updo2p26kqt2opmpvj3dimlp9h3u1.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "589974754114-klkgsaoudjuchj3qlfutqn4heotjpp8t.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.worldflags.memory"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
