@@ -41,6 +41,64 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
+  /// Persistent profile affordance in the top corner.
+  ///
+  /// Signed in with a photo -> the photo. Signed in without one -> their
+  /// initial. Signed out -> a generic person icon, and tapping routes to the
+  /// login screen instead of the profile.
+  ///
+  /// Wrapped in a Consumer so only this button rebuilds when auth state
+  /// changes; the surrounding layout is untouched.
+  Widget profileButton(BuildContext context) {
+    return Consumer<AuthService>(
+      builder: (context, auth, _) {
+        final user = auth.currentUser;
+        final signedIn = user != null;
+        final photoUrl = user?.photoURL;
+        final hasPhoto = photoUrl != null && photoUrl.isNotEmpty;
+        final name = (user?.displayName ?? '').trim();
+        final initial = name.isNotEmpty ? name[0].toUpperCase() : null;
+
+        return InkWell(
+          onTap: () {
+            audioPlayer.stop();
+            AppUtils.pushNamed(
+              context,
+              signedIn ? Routes.profileScreen : Routes.loginScreen,
+            );
+          },
+          borderRadius: const BorderRadius.all(Radius.circular(15)),
+          child: Container(
+            width: 50,
+            height: 50,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: blue,
+              borderRadius: const BorderRadius.all(Radius.circular(15)),
+              border: Border.all(color: lightGrey, width: 2),
+              image: hasPhoto
+                  ? DecorationImage(
+                      image: NetworkImage(photoUrl),
+                      fit: BoxFit.cover,
+                    )
+                  : null,
+            ),
+            child: hasPhoto
+                ? null
+                : Text(
+                    signedIn && initial != null ? initial : '👤',
+                    style: TextStyle(
+                      color: white,
+                      fontSize: signedIn && initial != null ? 22 : 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+          ),
+        );
+      },
+    );
+  }
+
   Widget body(BuildContext context, var screenSize){
     return SizedBox(
       width: screenSize.width,
@@ -152,29 +210,7 @@ class _MainScreenState extends State<MainScreen> {
             padding: const EdgeInsets.all(20),
             child: Align(
               alignment: Alignment.topRight,
-              child: InkWell(
-                onTap: () {
-                  audioPlayer.stop();
-                  final auth = Provider.of<AuthService>(context, listen: false);
-                  AppUtils.pushNamed(
-                    context,
-                    auth.isSignedIn
-                        ? Routes.profileScreen
-                        : Routes.loginScreen,
-                  );
-                },
-                child: Container(
-                  width: 50,
-                  height: 50,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: blue,
-                    borderRadius: const BorderRadius.all(Radius.circular(15)),
-                    border: Border.all(color: lightGrey, width: 2),
-                  ),
-                  child: const Text('👤', style: TextStyle(fontSize: 22)),
-                ),
-              ),
+              child: profileButton(context),
             ),
           ),
         ],

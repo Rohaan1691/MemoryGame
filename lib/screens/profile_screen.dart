@@ -3,6 +3,7 @@ import 'dart:developer' as developer;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:memorygame/config/app_theme.dart';
+import 'package:memorygame/config/milestones.dart';
 import 'package:memorygame/network/routes.dart';
 import 'package:memorygame/services/auth_service.dart';
 import 'package:memorygame/services/profile_service.dart';
@@ -19,6 +20,9 @@ class ProfileScreen extends StatefulWidget {
 
 class _ProfileScreenState extends State<ProfileScreen> {
   bool _busy = false;
+
+  /// Selected stats tab. VS Computer is the default.
+  String _selectedMode = GameModes.vsCpu;
 
   @override
   Widget build(BuildContext context) {
@@ -87,7 +91,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     const SizedBox(width: 20),
                     Expanded(
                       flex: 6,
-                      child: _statsPanel(stats: stats, loading: loading),
+                      child: _statsPanel(
+                        stats: stats,
+                        loading: loading,
+                        // Per-mode best streak for whichever tab is selected.
+                        bestStreak: ProfileService.bestStreakFor(
+                          data,
+                          _selectedMode,
+                        ),
+                      ),
                     ),
                   ],
                 );
@@ -224,7 +236,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   // ------------------------------------------------------------ right panel
 
-  Widget _statsPanel({required ProfileStats stats, required bool loading}) {
+  Widget _statsPanel({
+    required ProfileStats stats,
+    required bool loading,
+    required int bestStreak,
+  }) {
+    // Scoped view of whichever tab is selected.
+    final modeStats = stats.mode(_selectedMode);
+
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
       decoration: AppTheme.panel(borderColor: pink),
@@ -241,6 +260,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
           ),
           const SizedBox(height: 12),
+          _modeTabs(),
+          const SizedBox(height: 14),
+          // Per-mode: a streak can never span modes, because every route back
+          // to the Main screen (the only place the mode can be changed) calls
+          // restartGame(true), which zeroes the streak counters.
+          _milestonePanel(bestStreak),
+          const SizedBox(height: 14),
           if (loading)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 30),
@@ -251,21 +277,138 @@ class _ProfileScreenState extends State<ProfileScreen> {
           else ...[
             _statsHeaderRow(),
             const SizedBox(height: 6),
-            _statsRow('Easy', Difficulties.easy, stats, green),
-            _statsRow('Medium', Difficulties.medium, stats, yellow),
-            _statsRow('Hard', Difficulties.hard, stats, lightRed),
+            _statsRow('Easy', Difficulties.easy, modeStats, green),
+            _statsRow('Medium', Difficulties.medium, modeStats, yellow),
+            _statsRow('Hard', Difficulties.hard, modeStats, lightRed),
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 8),
               child: Divider(color: lightGrey, thickness: 2, height: 2),
             ),
-            _totalRow(stats),
-            const SizedBox(height: 14),
-            const Text(
-              'In two-player games, your record is tracked as Player 1.',
-              style: AppTheme.muted,
-            ),
+            _totalRow(modeStats),
+            // Only meaningful on the two-player tab; the P1 assumption does
+            // not apply to VS CPU games.
+            if (_selectedMode == GameModes.twoPlayer) ...[
+              const SizedBox(height: 14),
+              const Text(
+                'In two-player games, your record is tracked as Player 1.',
+                style: AppTheme.muted,
+              ),
+            ],
           ],
         ],
+      ),
+    );
+  }
+
+  /// Highest win-streak milestone reached in the SELECTED mode.
+  ///
+  /// VS CPU and two-player keep separate records: switching mode is only
+  /// possible via the Main screen, and every route back there calls
+  /// restartGame(true), which zeroes the streak counters. A run therefore
+  /// always belongs to exactly one mode.
+  Widget _milestonePanel(int bestStreak) {
+    final milestone = Milestones.highestFor(bestStreak);
+    final reached = milestone != null;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+      decoration: BoxDecoration(
+        color: reached ? lightBlueColor : imageBg,
+        borderRadius: const BorderRadius.all(
+          Radius.circular(AppTheme.radius),
+        ),
+        border: Border.all(
+          color: reached ? cyan : lightGrey,
+          width: AppTheme.panelBorderWidth,
+        ),
+      ),
+      child: Row(
+        children: [
+          Text(
+            reached ? milestone.icon : '🏅',
+            style: const TextStyle(fontSize: 30),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  reached ? milestone.title : 'No milestone yet',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: reached ? blue : textColor,
+                    fontSize: 17,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  reached
+                      ? 'Best streak: $bestStreak wins in a row'
+                      : 'Win ${Milestones.firstTier} in a row to earn your '
+                            'first milestone',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTheme.muted,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Two tabs, styled with the same palette and shape language as the Main and
+  /// Difficulty screen buttons rather than a default Material TabBar.
+  Widget _modeTabs() {
+    return Row(
+      children: [
+        _modeTab('VS Computer', GameModes.vsCpu),
+        const SizedBox(width: 10),
+        _modeTab('Two Player', GameModes.twoPlayer),
+      ],
+    );
+  }
+
+  Widget _modeTab(String label, String mode) {
+    final selected = _selectedMode == mode;
+    return Expanded(
+      child: InkWell(
+        onTap: selected ? null : () => setState(() => _selectedMode = mode),
+        borderRadius: const BorderRadius.all(Radius.circular(AppTheme.radius)),
+        child: Container(
+          height: 44,
+          decoration: BoxDecoration(
+            // Selected mirrors the Main screen's solid buttons (filled + gold
+            // border); unselected mirrors the Difficulty screen's outlined
+            // buttons (white fill + coloured border).
+            color: selected ? blue : white,
+            borderRadius: const BorderRadius.all(
+              Radius.circular(AppTheme.radius),
+            ),
+            border: Border.all(
+              color: selected ? yellow : lightGrey,
+              width: selected
+                  ? AppTheme.solidButtonBorderWidth
+                  : AppTheme.panelBorderWidth,
+            ),
+          ),
+          child: Center(
+            child: Text(
+              label,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: selected ? white : textColor,
+                fontSize: 15,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -298,7 +441,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget _statsRow(
     String label,
     String key,
-    ProfileStats stats,
+    ModeStats stats,
     Color accent,
   ) {
     final rate = stats.winRate(key);
@@ -326,7 +469,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _totalRow(ProfileStats stats) {
+  Widget _totalRow(ModeStats stats) {
     final rate = stats.totalWinRate;
     return Row(
       children: [

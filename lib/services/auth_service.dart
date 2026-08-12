@@ -75,15 +75,22 @@ class AuthService extends ChangeNotifier {
   /// Whether Sign in with Apple can be offered.
   ///
   /// Two conditions, both required:
-  ///  * the platform supports it, and
-  ///  * real Apple credentials have been filled into auth_config.dart.
+  ///  * the plugin reports support, and
+  ///  * we are actually on an Apple platform.
   ///
-  /// The second check matters on Android: SignInWithApple.isAvailable()
-  /// returns TRUE there, because the package supports Apple via a web flow.
-  /// That flow needs `webAuthenticationOptions`, which cannot be built from
-  /// the TODO placeholders, so without this guard the button renders on
-  /// Android and throws the moment it is tapped.
-  bool get isAppleAvailable => _appleAvailable && isAppleConfigured;
+  /// The second check is not redundant. SignInWithApple.isAvailable() returns
+  /// TRUE on Android, because the package supports Apple through a
+  /// browser-based flow there. That flow requires `webAuthenticationOptions`
+  /// (a Services ID and redirect URI), which this app deliberately does not
+  /// configure — Apple sign-in is iOS-only. Without this guard the button
+  /// renders on Android and throws the moment it is tapped.
+  bool get isAppleAvailable => _appleAvailable && _isApplePlatform;
+
+  /// True only on iOS/macOS, where the native Sign in with Apple sheet exists.
+  static bool get _isApplePlatform =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.iOS ||
+          defaultTargetPlatform == TargetPlatform.macOS);
 
   User? get currentUser => _auth.currentUser;
 
@@ -189,13 +196,25 @@ class AuthService extends ChangeNotifier {
         return const AuthOutcome.failure('Sign-in failed, please try again.');
       }
 
-      await _profileService.upsertOnSignIn(
-        user: user,
-        provider: AuthProviders.google,
-        displayName: account.displayName,
-        email: account.email,
-        photoUrl: account.photoUrl,
-      );
+      // As with Apple: auth has succeeded, so a profile-write failure must not
+      // be reported as a sign-in failure. See the note in signInWithApple.
+      try {
+        await _profileService.upsertOnSignIn(
+          user: user,
+          provider: AuthProviders.google,
+          displayName: account.displayName,
+          email: account.email,
+          photoUrl: account.photoUrl,
+        );
+      } on FirebaseException catch (e, st) {
+        developer.log(
+          'Profile upsert failed after successful Google auth: '
+          'code=${e.code} message=${e.message}',
+          name: 'AuthService',
+          error: e,
+          stackTrace: st,
+        );
+      }
 
       return const AuthOutcome.success();
     } on GoogleSignInException catch (e, st) {
@@ -237,11 +256,12 @@ class AuthService extends ChangeNotifier {
         stackTrace: st,
       );
       return const AuthOutcome.failure('Sign-in failed, please try again.');
-    } on Exception catch (e, st) {
-      // Safety net, deliberately last — see the equivalent note in
-      // signInWithApple. Ensures no exception reaches the framework unhandled.
+    } catch (e, st) {
+      // Safety net, deliberately last and untyped — see the equivalent note in
+      // signInWithApple. Ensures nothing, Exception or Error, reaches the
+      // framework unhandled.
       developer.log(
-        'Unexpected exception during Google sign-in',
+        'Unexpected throwable during Google sign-in',
         name: 'AuthService',
         error: e,
         stackTrace: st,
@@ -254,68 +274,107 @@ class AuthService extends ChangeNotifier {
 
   // ------------------------------------------------------------------- Apple
 
+  /// Presents the native Apple sheet and builds a Firebase credential from the
+  /// result. Returns null only when Apple gives back no identity token.
+  ///
+  /// Shared by signInWithApple() and reauthenticate() so the nonce handling
+  /// exists in exactly one place — duplicating it would risk the two copies
+  /// drifting, and a nonce mistake fails only at runtime.
+  ///
+  /// Throws on cancellation/failure; every caller maps those typed exceptions.
+  Future<({OAuthCredential credential, AuthorizationCredentialAppleID raw})?>
+  _obtainAppleCredential() async {
+    // A nonce binds this specific request to the token Apple returns,
+    // preventing a captured token from being replayed.
+    //
+    // Apple receives the SHA-256 HASH and embeds it in the identity token.
+    // Firebase receives the RAW string and hashes it itself to compare.
+    // Sending these the wrong way round compiles fine and fails at runtime
+    // with `invalid-credential`.
+    final rawNonce = _generateRawNonce();
+    final hashedNonce = _sha256OfString(rawNonce);
+
+    // No webAuthenticationOptions: that parameter exists only for the
+    // browser-based Android/web flow. On iOS this uses the native sheet,
+    // which needs no Services ID or redirect URI.
+    final appleCredential = await SignInWithApple.getAppleIDCredential(
+      scopes: const [
+        AppleIDAuthorizationScopes.email,
+        AppleIDAuthorizationScopes.fullName,
+      ],
+      nonce: hashedNonce,
+    );
+
+    final identityToken = appleCredential.identityToken;
+    if (identityToken == null) {
+      developer.log(
+        'Apple sign-in returned a null identityToken',
+        name: 'AuthService',
+      );
+      return null;
+    }
+
+    final oauthCredential = OAuthProvider('apple.com').credential(
+      idToken: identityToken,
+      rawNonce: rawNonce,
+    );
+    return (credential: oauthCredential, raw: appleCredential);
+  }
+
+  /// Runs the Google sheet and builds a Firebase credential.
+  /// Returns null when Google gives back no ID token.
+  Future<AuthCredential?> _obtainGoogleCredential() async {
+    await _ensureGoogleInitialised();
+
+    if (!GoogleSignIn.instance.supportsAuthenticate()) {
+      developer.log(
+        'GoogleSignIn.authenticate unsupported on this platform',
+        name: 'AuthService',
+      );
+      return null;
+    }
+
+    final account = await GoogleSignIn.instance.authenticate();
+    final idToken = account.authentication.idToken;
+    if (idToken == null) {
+      developer.log(
+        'Google sign-in returned a null idToken',
+        name: 'AuthService',
+      );
+      return null;
+    }
+    return GoogleAuthProvider.credential(idToken: idToken);
+  }
+
   Future<AuthOutcome> signInWithApple() async {
     if (_isBusy) return const AuthOutcome.cancelled();
 
-    // Hard stop before touching the plugin. Without real Apple values the
-    // Android/web flow cannot be constructed and the package throws a plain
-    // Exception that no typed catch would match.
-    if (!isAppleConfigured) {
+    // Hard stop before touching the plugin. On a non-Apple platform the
+    // package would take its browser-based path and throw a plain Exception
+    // ("`webAuthenticationOptions` argument must be provided on Android")
+    // that no typed catch would match. Reachable via reauthenticate(), which
+    // does not go through the login screen's visibility check.
+    if (!_isApplePlatform) {
       developer.log(
-        'Apple sign-in attempted while appleServicesId/appleRedirectUri are '
-        'still TODO placeholders',
+        'Apple sign-in attempted on a non-Apple platform; it is iOS-only here',
         name: 'AuthService',
       );
       return const AuthOutcome.failure(
-        'Sign in with Apple is not available yet.',
+        'Sign in with Apple is not available on this device.',
       );
     }
 
     _setBusy(true);
     try {
-      // A nonce binds this specific request to the token Apple returns,
-      // preventing a captured token from being replayed.
-      //
-      // Apple receives the SHA-256 HASH and embeds it in the identity token.
-      // Firebase receives the RAW string and hashes it itself to compare.
-      // Sending these the wrong way round compiles fine and fails at runtime
-      // with `invalid-credential`.
-      final rawNonce = _generateRawNonce();
-      final hashedNonce = _sha256OfString(rawNonce);
-
-      // Required on Android and web, where the flow is browser-based. Null on
-      // iOS/macOS, which use the native sheet.
-      final webOptions = (kIsWeb || defaultTargetPlatform == TargetPlatform.android)
-          ? WebAuthenticationOptions(
-              clientId: appleServicesId,
-              redirectUri: Uri.parse(appleRedirectUri),
-            )
-          : null;
-
-      final appleCredential = await SignInWithApple.getAppleIDCredential(
-        scopes: const [
-          AppleIDAuthorizationScopes.email,
-          AppleIDAuthorizationScopes.fullName,
-        ],
-        nonce: hashedNonce,
-        webAuthenticationOptions: webOptions,
-      );
-
-      final identityToken = appleCredential.identityToken;
-      if (identityToken == null) {
-        developer.log(
-          'Apple sign-in returned a null identityToken',
-          name: 'AuthService',
-        );
+      final obtained = await _obtainAppleCredential();
+      if (obtained == null) {
         return const AuthOutcome.failure('Sign-in failed, please try again.');
       }
+      final appleCredential = obtained.raw;
 
-      final oauthCredential = OAuthProvider('apple.com').credential(
-        idToken: identityToken,
-        rawNonce: rawNonce,
+      final userCredential = await _auth.signInWithCredential(
+        obtained.credential,
       );
-
-      final userCredential = await _auth.signInWithCredential(oauthCredential);
       final user = userCredential.user;
       if (user == null) {
         return const AuthOutcome.failure('Sign-in failed, please try again.');
@@ -329,17 +388,41 @@ class AuthService extends ChangeNotifier {
       // authorization for a given Apple ID, and null on every subsequent
       // sign-in. Capture it now; the upsert guards against a later null
       // overwriting what we stored.
-      final appleName = _composeAppleName(
+      var appleName = _composeAppleName(
         appleCredential.givenName,
         appleCredential.familyName,
       );
 
-      await _profileService.upsertOnSignIn(
-        user: user,
-        provider: AuthProviders.apple,
-        displayName: appleName,
-        email: appleCredential.email,
-      );
+      if (appleName != null) {
+        // Stash immediately. Apple never resends this, so if the Firestore
+        // write below fails the name would otherwise be gone for good.
+        await _storeAppleDisplayName(appleName);
+      } else {
+        // Recover a name captured on an earlier attempt whose write failed.
+        appleName = await _readStoredAppleDisplayName();
+      }
+
+      // A profile-write failure must NOT fail the sign-in: authentication has
+      // already succeeded, so returning a failure here would leave the UI
+      // showing an error while the user is actually signed in. Firestore
+      // queues writes offline and replays them, and recordResult recreates a
+      // missing document, so this is recoverable on its own.
+      try {
+        await _profileService.upsertOnSignIn(
+          user: user,
+          provider: AuthProviders.apple,
+          displayName: appleName,
+          email: appleCredential.email,
+        );
+      } on FirebaseException catch (e, st) {
+        developer.log(
+          'Profile upsert failed after successful Apple auth: '
+          'code=${e.code} message=${e.message}',
+          name: 'AuthService',
+          error: e,
+          stackTrace: st,
+        );
+      }
 
       // Mirror onto the FirebaseAuth profile too, but only on first capture.
       if (appleName != null &&
@@ -404,14 +487,15 @@ class AuthService extends ChangeNotifier {
         stackTrace: st,
       );
       return const AuthOutcome.failure('Sign-in failed, please try again.');
-    } on Exception catch (e, st) {
-      // Safety net, deliberately last. The plugin can throw a bare Exception
-      // (e.g. "`webAuthenticationOptions` argument must be provided on
-      // Android") that matches none of the typed catches above. Without this,
-      // such an error escapes to the framework as an unhandled exception and
-      // the user sees a dead button with no feedback.
+    } catch (e, st) {
+      // Safety net, deliberately last and deliberately untyped. Plugins can
+      // throw a bare Exception (e.g. "`webAuthenticationOptions` argument must
+      // be provided on Android") or an Error subclass, neither of which the
+      // typed catches above match. Without this, it escapes to the framework
+      // as an unhandled error and the user sees a dead button with no
+      // feedback. Full detail is logged so nothing is silently swallowed.
       developer.log(
-        'Unexpected exception during Apple sign-in',
+        'Unexpected throwable during Apple sign-in',
         name: 'AuthService',
         error: e,
         stackTrace: st,
@@ -550,10 +634,20 @@ class AuthService extends ChangeNotifier {
             );
           }
         } else {
+          // No code stored (secure-storage write failed, or the account was
+          // created by a build predating this storage). Apple REQUIRES token
+          // revocation, so deleting without it would leave the app authorised
+          // in the user's Apple ID settings and orphan the grant.
+          //
+          // Ask for re-authentication instead of skipping: reauthenticate()
+          // stores a fresh authorization code, after which the retry can
+          // revoke properly.
           developer.log(
-            'No stored Apple authorization code; skipping revocation',
+            'No stored Apple authorization code; requesting re-auth to obtain '
+            'one before deletion',
             name: 'AuthService',
           );
+          return DeleteAccountOutcome.requiresReauthentication();
         }
       }
 
@@ -599,6 +693,7 @@ class AuthService extends ChangeNotifier {
       }
 
       await _clearAppleAuthorizationCode();
+      await _clearStoredAppleDisplayName();
       try {
         await GoogleSignIn.instance.signOut();
       } on GoogleSignInException catch (e, st) {
@@ -617,16 +712,145 @@ class AuthService extends ChangeNotifier {
     }
   }
 
-  /// Re-runs the provider flow to refresh the session, then re-authenticates.
+  /// Refreshes the session for the CURRENT user.
   /// Used when `user.delete()` reports `requires-recent-login`.
+  ///
+  /// This deliberately uses `reauthenticateWithCredential`, not
+  /// `signInWithCredential`. The difference is critical during account
+  /// deletion: `signInWithCredential` would happily switch the session to a
+  /// different account if the user picked another Apple ID or Google account
+  /// at the sheet, and the deletion that follows would then destroy THAT
+  /// account instead of the intended one. `reauthenticateWithCredential`
+  /// rejects a credential belonging to anyone else with `user-mismatch`.
   Future<AuthOutcome> reauthenticate() async {
     final user = _auth.currentUser;
     if (user == null) {
       return const AuthOutcome.failure('You are not signed in.');
     }
+    if (_isBusy) return const AuthOutcome.cancelled();
 
+    final uidBefore = user.uid;
     final isApple = user.providerData.any((p) => p.providerId == 'apple.com');
-    return isApple ? signInWithApple() : signInWithGoogle();
+
+    if (isApple && !_isApplePlatform) {
+      developer.log(
+        'Apple re-authentication attempted on a non-Apple platform',
+        name: 'AuthService',
+      );
+      return const AuthOutcome.failure(
+        'Sign in with Apple is not available on this device.',
+      );
+    }
+
+    _setBusy(true);
+    try {
+      final AuthCredential credential;
+
+      if (isApple) {
+        final obtained = await _obtainAppleCredential();
+        if (obtained == null) {
+          return const AuthOutcome.failure(
+            'Re-authentication failed, please try again.',
+          );
+        }
+        credential = obtained.credential;
+        // Refresh the stored authorization code while we have a fresh one.
+        // Deletion needs it to revoke, and this is the natural moment to
+        // repair a missing or stale value.
+        await _storeAppleAuthorizationCode(obtained.raw.authorizationCode);
+      } else {
+        final googleCredential = await _obtainGoogleCredential();
+        if (googleCredential == null) {
+          return const AuthOutcome.failure(
+            'Re-authentication failed, please try again.',
+          );
+        }
+        credential = googleCredential;
+      }
+
+      await user.reauthenticateWithCredential(credential);
+
+      // Belt and braces: reauthenticateWithCredential should already have
+      // thrown user-mismatch, but never proceed to a delete if the signed-in
+      // identity changed for any reason.
+      if (_auth.currentUser?.uid != uidBefore) {
+        developer.log(
+          'Re-authentication changed the active user; aborting',
+          name: 'AuthService',
+        );
+        return const AuthOutcome.failure(
+          'That is a different account. Please sign in again with the account '
+          'you want to delete.',
+        );
+      }
+
+      return const AuthOutcome.success();
+    } on SignInWithAppleAuthorizationException catch (e, st) {
+      if (e.code == AuthorizationErrorCode.canceled) {
+        developer.log(
+          'Apple re-authentication cancelled by user',
+          name: 'AuthService',
+        );
+        return const AuthOutcome.cancelled();
+      }
+      developer.log(
+        'SignInWithAppleAuthorizationException during re-auth: code=${e.code}',
+        name: 'AuthService',
+        error: e,
+        stackTrace: st,
+      );
+      return AuthOutcome.failure(_messageForAppleException(e));
+    } on GoogleSignInException catch (e, st) {
+      if (e.code == GoogleSignInExceptionCode.canceled) {
+        developer.log(
+          'Google re-authentication cancelled by user',
+          name: 'AuthService',
+        );
+        return const AuthOutcome.cancelled();
+      }
+      developer.log(
+        'GoogleSignInException during re-auth: code=${e.code}',
+        name: 'AuthService',
+        error: e,
+        stackTrace: st,
+      );
+      return AuthOutcome.failure(_messageForGoogleException(e));
+    } on FirebaseAuthException catch (e, st) {
+      developer.log(
+        're-authentication failed: code=${e.code} message=${e.message}',
+        name: 'AuthService',
+        error: e,
+        stackTrace: st,
+      );
+      return AuthOutcome.failure(
+        _messageForAuthException(e, isApple ? 'Apple' : 'Google'),
+      );
+    } on PlatformException catch (e, st) {
+      developer.log(
+        'PlatformException during re-auth: code=${e.code}',
+        name: 'AuthService',
+        error: e,
+        stackTrace: st,
+      );
+      return const AuthOutcome.failure(
+        'Re-authentication failed, please try again.',
+      );
+    } catch (e, st) {
+      // Last resort. Catches Error subclasses too (a plugin TypeError, for
+      // example), which `on Exception` would let escape into the framework as
+      // an unhandled error mid-deletion.
+      developer.log(
+        'Unexpected throwable during re-auth',
+        name: 'AuthService',
+        error: e,
+        stackTrace: st,
+      );
+      return const AuthOutcome.failure(
+        'Re-authentication failed, please try again.',
+      );
+    } finally {
+      _setBusy(false);
+    }
   }
 
   // -------------------------------------------------------- secure storage
@@ -655,6 +879,50 @@ class AuthService extends ChangeNotifier {
         stackTrace: st,
       );
       return null;
+    }
+  }
+
+  /// Persists the name Apple supplies on the first authorization only, so a
+  /// failed Firestore write cannot lose it permanently.
+  Future<void> _storeAppleDisplayName(String name) async {
+    try {
+      await _secureStorage.write(key: appleDisplayNameStorageKey, value: name);
+    } on PlatformException catch (e, st) {
+      developer.log(
+        'Failed to store Apple display name: code=${e.code}',
+        name: 'AuthService',
+        error: e,
+        stackTrace: st,
+      );
+    }
+  }
+
+  Future<String?> _readStoredAppleDisplayName() async {
+    try {
+      final value = await _secureStorage.read(key: appleDisplayNameStorageKey);
+      if (value == null || value.trim().isEmpty) return null;
+      return value.trim();
+    } on PlatformException catch (e, st) {
+      developer.log(
+        'Failed to read Apple display name: code=${e.code}',
+        name: 'AuthService',
+        error: e,
+        stackTrace: st,
+      );
+      return null;
+    }
+  }
+
+  Future<void> _clearStoredAppleDisplayName() async {
+    try {
+      await _secureStorage.delete(key: appleDisplayNameStorageKey);
+    } on PlatformException catch (e, st) {
+      developer.log(
+        'Failed to clear Apple display name: code=${e.code}',
+        name: 'AuthService',
+        error: e,
+        stackTrace: st,
+      );
     }
   }
 
@@ -712,6 +980,15 @@ class AuthService extends ChangeNotifier {
       case 'invalid-credential':
         // Almost always a configuration problem rather than a user problem.
         return 'Sign-in failed, please try again.';
+      case 'user-mismatch':
+        // Raised by reauthenticateWithCredential when the chosen account is
+        // not the signed-in one. Critical during deletion.
+        return 'That is a different account. Please choose the account you '
+            'are signed in with.';
+      case 'user-not-found':
+        return 'This account no longer exists.';
+      case 'too-many-requests':
+        return 'Too many attempts. Please wait a moment and try again.';
       case 'user-disabled':
         return 'This account has been disabled.';
       case 'operation-not-allowed':

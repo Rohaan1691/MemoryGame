@@ -52,9 +52,9 @@ class _GameScreenState extends State<GameScreen>
   /// Records the finished game against the signed-in account.
   ///
   /// The signed-in user is treated as Player 1, so a P1 win is a win and a P2
-  /// (or CPU) win is a loss. Recorded in both VS CPU and two-player modes.
-  /// Silently does nothing when signed out, and never surfaces an error — a
-  /// game ending must not interrupt the player.
+  /// (or CPU) win is a loss. Recorded in both VS CPU and two-player modes,
+  /// which are now tracked separately. Silently does nothing when signed out,
+  /// and never surfaces an error — a game ending must not interrupt the player.
   void _recordGameResultOnce(GameProvider provider) {
     if (_resultRecorded) return;
     _resultRecorded = true;
@@ -66,7 +66,16 @@ class _GameScreenState extends State<GameScreen>
     final String difficulty = Difficulties.fromMode(provider.difficultyMode);
 
     unawaited(
-      service.recordResult(difficulty: difficulty, won: player1Won),
+      service.recordResult(
+        // Existing flag, read as-is. How it is set and how each mode plays
+        // are untouched.
+        isVsCpu: provider.isVsCpu,
+        difficulty: difficulty,
+        won: player1Won,
+        // Already incremented above by checkGameCompleted before this call.
+        // Read only — streak computation and resets are unchanged.
+        currentStreak: provider.player1WinStreak,
+      ),
     );
   }
 
