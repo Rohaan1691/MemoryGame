@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Export options for an App Store / TestFlight build.
+
+	  Used by:  flutter build ipa --export-options-plist=ios/ExportOptions.plist
+	  or:       xcodebuild -exportArchive -exportOptionsPlist ios/ExportOptions.plist
+
+	  Requires an Apple Distribution certificate and an App Store provisioning
+	  profile for com.worldflags.memory to exist first. Create them via
+	  Xcode > Settings > Accounts > Manage Certificates > + > Apple Distribution.
+	-->
+	<key>method</key>
+	<string>app-store-connect</string>
+
+	<key>teamID</key>
+	<string>XYV4JG53Z7</string>
+
+	<!-- Let Xcode pick the matching distribution profile. Switch to manual
+	     and add a provisioningProfiles dict if you ever need a specific one. -->
+	<key>signingStyle</key>
+	<string>automatic</string>
+
+	<!-- Bitcode has been removed from the toolchain; must be false. -->
+	<key>uploadBitcode</key>
+	<false/>
+
+	<key>uploadSymbols</key>
+	<true/>
+
+	<!-- Keep Flutter's own symbol handling predictable. -->
+	<key>compileBitcode</key>
+	<false/>
+
+	<!-- Do not let Xcode strip Swift symbols the crash reporter needs. -->
+	<key>stripSwiftSymbols</key>
+	<true/>
+
+	<key>destination</key>
+	<string>export</string>
+</dict>
+</plist>

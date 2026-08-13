@@ -243,24 +243,51 @@ class AppTheme {
   /// Dialog shell matching the Game screen's restart / exit / win dialogs:
   /// 20 radius, oversized emoji, lightRed title, body constrained to
   /// screenWidth / 2.5 so it reads well in landscape.
+  ///
+  /// The app is landscape-locked, so vertical space is scarce — and when a
+  /// dialog contains a text field the on-screen keyboard can take more than
+  /// half of what is left. Two things keep that usable:
+  ///
+  ///  * `scrollable: true` puts the title and content in a single scroll view,
+  ///    so nothing overlaps or overflows when the keyboard appears.
+  ///  * the decorative emoji shrinks (and the vertical inset tightens) while
+  ///    the keyboard is open, reclaiming the space the field needs.
   static AlertDialog dialog({
     required BuildContext context,
     required String emoji,
     required String title,
     required List<Widget> children,
   }) {
+    final media = MediaQuery.of(context);
+    final keyboardOpen = media.viewInsets.bottom > 0;
+
     return AlertDialog(
+      // Keeps title + content in one scroll view; without this the column
+      // overflows behind the keyboard instead of scrolling.
+      scrollable: true,
+      insetPadding: EdgeInsets.symmetric(
+        horizontal: 40,
+        vertical: keyboardOpen ? 8 : 24,
+      ),
+      titlePadding: EdgeInsets.fromLTRB(24, keyboardOpen ? 12 : 24, 24, 0),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(radius),
       ),
       title: Column(
         children: [
-          Text(emoji, textAlign: TextAlign.center, style: dialogEmoji),
+          Text(
+            emoji,
+            textAlign: TextAlign.center,
+            // Half size while typing so the field stays comfortably visible.
+            style: keyboardOpen
+                ? dialogEmoji.copyWith(fontSize: 26)
+                : dialogEmoji,
+          ),
           Text(title, textAlign: TextAlign.center, style: heading),
         ],
       ),
       content: SizedBox(
-        width: MediaQuery.of(context).size.width / 2.5,
+        width: media.size.width / 2.5,
         child: Column(mainAxisSize: MainAxisSize.min, children: children),
       ),
     );

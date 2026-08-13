@@ -90,100 +90,125 @@ class _LoginScreenState extends State<LoginScreen> {
       backgroundColor: black,
       body: AppTheme.background(
         context,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(40, 20, 40, 20),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              // Left: brand block
-              Expanded(
-                flex: 4,
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    AppTheme.logo(size: screenSize.height * 0.42),
-                    const SizedBox(height: 16),
-                    const Text(
-                      'Sign in to save your scores',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 40),
-              // Right: sign-in options
-              Expanded(
-                flex: 5,
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    AppTheme.solidButton(
-                      label: _busy ? 'PLEASE WAIT…' : 'SIGN IN WITH GOOGLE',
-                      color: blue,
-                      fontSize: 18,
-                      leading: const Text('🌐', style: TextStyle(fontSize: 20)),
-                      onTap: _busy
-                          ? null
-                          : () => _handle(
-                              () =>
-                                  context.read<AuthService>().signInWithGoogle(),
-                            ),
-                    ),
-                    // Apple's HIG mandates the official button; hide it
-                    // entirely where Sign in with Apple is unsupported.
-                    if (appleAvailable) ...[
-                      const SizedBox(height: 16),
-                      SignInWithAppleButton(
-                        height: 60,
-                        borderRadius: const BorderRadius.all(
-                          Radius.circular(AppTheme.radius),
+        child: SafeArea(
+          // Center + a single outer scroll view: the Row shrink-wraps to its
+          // content and sits vertically centred, and only scrolls if the
+          // content is ever taller than the viewport.
+          //
+          // The scroll view must stay OUTSIDE the Row. Placed inside a column,
+          // it expands to the full height and top-anchors its child, which is
+          // what pushed this layout to the top of the screen.
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(40, 16, 40, 16),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  // Left: brand block
+                  Expanded(
+                    flex: 4,
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // No Flexible here: a flexible child forces the Column
+                        // to consume the full height, which also broke
+                        // centring.
+                        AppTheme.logo(
+                          size: (screenSize.height * 0.42).clamp(96.0, 220.0),
                         ),
-                        onPressed: _busy
-                            ? () {}
-                            : () => _handle(
-                                () => context
-                                    .read<AuthService>()
-                                    .signInWithApple(),
-                              ),
-                      ),
-                    ],
-                    const SizedBox(height: 16),
-                    AppTheme.outlineButton(
-                      label: '▶  PLAY AS GUEST',
-                      color: green,
-                      fontSize: 16,
-                      onTap: _busy
-                          ? null
-                          : () {
-                              developer.log(
-                                'Continuing as guest',
-                                name: 'LoginScreen',
-                              );
-                              AppUtils.popAndPushNamed(context, Routes.main);
-                            },
+                        const SizedBox(height: 12),
+                        const Text(
+                          'Sign in to save your scores',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 14),
-                    const Text(
-                      'Signing in is optional — your scores are only saved '
-                      'when you do.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: white,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                      ),
+                  ),
+                  const SizedBox(width: 40),
+                  // Right: sign-in options.
+                  Expanded(
+                    flex: 5,
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        AppTheme.solidButton(
+                          label: _busy ? 'PLEASE WAIT…' : 'SIGN IN WITH GOOGLE',
+                          color: blue,
+                          fontSize: 18,
+                          leading: const Text(
+                            '🌐',
+                            style: TextStyle(fontSize: 20),
+                          ),
+                          onTap: _busy
+                              ? null
+                              : () => _handle(
+                                  () => context
+                                      .read<AuthService>()
+                                      .signInWithGoogle(),
+                                ),
+                        ),
+                        // Apple's HIG mandates the official button; hide it
+                        // entirely where Sign in with Apple is unsupported.
+                        if (appleAvailable) ...[
+                          const SizedBox(height: 16),
+                          SignInWithAppleButton(
+                            height: 60,
+                            borderRadius: const BorderRadius.all(
+                              Radius.circular(AppTheme.radius),
+                            ),
+                            onPressed: _busy
+                                ? () {}
+                                : () => _handle(
+                                    () => context
+                                        .read<AuthService>()
+                                        .signInWithApple(),
+                                  ),
+                          ),
+                        ],
+                        const SizedBox(height: 16),
+                        AppTheme.outlineButton(
+                          label: '▶  PLAY AS GUEST',
+                          color: green,
+                          fontSize: 16,
+                          onTap: _busy
+                              ? null
+                              : () {
+                                  developer.log(
+                                    'Continuing as guest',
+                                    name: 'LoginScreen',
+                                  );
+                                  AppUtils.popAndPushNamed(
+                                    context,
+                                    Routes.main,
+                                  );
+                                },
+                        ),
+                        const SizedBox(height: 14),
+                        const Text(
+                          'Signing in is optional — your scores are only saved '
+                          'when you do.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: white,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         ),
       ),

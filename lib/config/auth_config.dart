@@ -16,19 +16,35 @@ const firebaseProjectId = 'multimatch-flag-challenge';
 const googleWebClientId =
     '589974754114-ia3updo2p26kqt2opmpvj3dimlp9h3u1.apps.googleusercontent.com';
 
-// SIGN IN WITH APPLE — iOS ONLY
+// SIGN IN WITH APPLE — iOS AND ANDROID
 //
-// The native iOS flow needs no configuration values here. It is driven by:
+// iOS uses the native sheet, driven by:
 //   * the "Sign in with Apple" capability on the App ID (Developer portal),
 //   * the com.apple.developer.applesignin entitlement in
 //     ios/Runner/Runner.entitlements (Xcode-generated — do not hand-edit), and
 //   * the Apple provider enabled in the Firebase Console.
 //
-// A Services ID, private key (.p8) and redirect URI are ONLY required for the
-// browser-based flow used on Android and web. Apple sign-in is deliberately not
-// offered on Android, so those values do not exist and
-// `webAuthenticationOptions` is never passed. See AuthService.isAppleAvailable,
-// which hides the button on every non-Apple platform.
+// Android has no native Apple support, so it runs a browser-based flow that
+// additionally needs the two values below plus the SignInWithAppleCallback
+// activity registered in android/app/src/main/AndroidManifest.xml with the
+// `signinwithapple` scheme. Without that activity the browser cannot hand
+// control back to the app.
+
+/// Apple Services ID (a separate identifier from either bundle ID).
+const appleServicesId = 'com.worldflags.memory.service';
+
+/// Must match the Return URL configured on the Services ID in the Apple
+/// Developer portal. Apple posts the result here and Firebase's auth handler
+/// redirects back into the app via the `signinwithapple` scheme.
+const appleRedirectUri =
+    'https://multimatch-flag-challenge.firebaseapp.com/__/auth/handler';
+
+/// Guards the Apple flow against being offered with placeholder values.
+bool get isAppleConfigured =>
+    appleServicesId.isNotEmpty &&
+    appleRedirectUri.isNotEmpty &&
+    !appleServicesId.startsWith('TODO') &&
+    !appleRedirectUri.startsWith('TODO');
 
 /// Firestore collection holding user profile documents (users/{uid}).
 const usersCollection = 'users';

@@ -68,8 +68,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     (data?['displayName'] as String?)?.trim().isNotEmpty == true
                     ? data!['displayName'] as String
                     : (user.displayName ?? 'Player');
-                final email =
-                    (data?['email'] as String?) ?? (user.email ?? '');
+                final email = (data?['email'] as String?) ?? (user.email ?? '');
                 final photoUrl =
                     (data?['photoUrl'] as String?) ?? user.photoURL;
                 final loading =
@@ -77,7 +76,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     data == null;
 
                 return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  // Stretch so both panels fill the available height; each
+                  // scrolls internally rather than overflowing. Landscape
+                  // leaves little vertical room, and the stats panel grows
+                  // with the milestone row + tabs + table.
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Expanded(
                       flex: 4,
@@ -122,84 +125,86 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
       decoration: AppTheme.panel(borderColor: cyan),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              _avatar(photoUrl, displayName),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      displayName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: black,
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                _avatar(photoUrl, displayName),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        displayName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: black,
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      email,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppTheme.muted,
-                    ),
-                  ],
+                      const SizedBox(height: 2),
+                      Text(
+                        email,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTheme.muted,
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          AppTheme.outlineButton(
-            label: '✏️  EDIT NAME',
-            color: blue,
-            height: 46,
-            onTap: _busy ? null : () => _showEditNameDialog(displayName),
-          ),
-          const SizedBox(height: 10),
-          AppTheme.outlineButton(
-            label: '🏠  BACK TO MENU',
-            color: green,
-            height: 46,
-            onTap: _busy
-                ? null
-                : () => AppUtils.popAndPushNamed(context, Routes.main),
-          ),
-          const SizedBox(height: 10),
-          AppTheme.outlineButton(
-            label: '🚪  SIGN OUT',
-            color: grey,
-            height: 46,
-            onTap: _busy ? null : _handleSignOut,
-          ),
-          const SizedBox(height: 14),
-          // Account deletion: plainly visible, red, per App Store 5.1.1.
-          InkWell(
-            onTap: _busy ? null : _showDeleteAccountDialog,
-            child: const Padding(
-              padding: EdgeInsets.symmetric(vertical: 6),
-              child: Text(
-                'Delete account',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: red,
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                  decoration: TextDecoration.underline,
-                  decorationColor: red,
+              ],
+            ),
+            const SizedBox(height: 16),
+            AppTheme.outlineButton(
+              label: '✏️  EDIT NAME',
+              color: blue,
+              height: 46,
+              onTap: _busy ? null : () => _showEditNameDialog(displayName),
+            ),
+            const SizedBox(height: 10),
+            AppTheme.outlineButton(
+              label: '🏠  BACK TO MENU',
+              color: green,
+              height: 46,
+              onTap: _busy
+                  ? null
+                  : () => AppUtils.popAndPushNamed(context, Routes.main),
+            ),
+            const SizedBox(height: 10),
+            AppTheme.outlineButton(
+              label: '🚪  SIGN OUT',
+              color: grey,
+              height: 46,
+              onTap: _busy ? null : _handleSignOut,
+            ),
+            const SizedBox(height: 14),
+            // Account deletion: plainly visible, red, per App Store 5.1.1.
+            InkWell(
+              onTap: _busy ? null : _showDeleteAccountDialog,
+              child: const Padding(
+                padding: EdgeInsets.symmetric(vertical: 6),
+                child: Text(
+                  'Delete account',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: red,
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    decoration: TextDecoration.underline,
+                    decorationColor: red,
+                  ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -214,10 +219,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         shape: BoxShape.circle,
         border: Border.all(color: cyan, width: 3),
         image: (photoUrl != null && photoUrl.isNotEmpty)
-            ? DecorationImage(
-                image: NetworkImage(photoUrl),
-                fit: BoxFit.cover,
-              )
+            ? DecorationImage(image: NetworkImage(photoUrl), fit: BoxFit.cover)
             : null,
       ),
       alignment: Alignment.center,
@@ -247,55 +249,55 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
       decoration: AppTheme.panel(borderColor: pink),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Text(
-            '🏆  YOUR RECORD',
-            style: TextStyle(
-              color: lightRed,
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 12),
-          _modeTabs(),
-          const SizedBox(height: 14),
-          // Per-mode: a streak can never span modes, because every route back
-          // to the Main screen (the only place the mode can be changed) calls
-          // restartGame(true), which zeroes the streak counters.
-          _milestonePanel(bestStreak),
-          const SizedBox(height: 14),
-          if (loading)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 30),
-              child: Center(
-                child: CircularProgressIndicator(color: cyan),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              '🏆  YOUR RECORD',
+              style: TextStyle(
+                color: lightRed,
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
               ),
-            )
-          else ...[
-            _statsHeaderRow(),
-            const SizedBox(height: 6),
-            _statsRow('Easy', Difficulties.easy, modeStats, green),
-            _statsRow('Medium', Difficulties.medium, modeStats, yellow),
-            _statsRow('Hard', Difficulties.hard, modeStats, lightRed),
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 8),
-              child: Divider(color: lightGrey, thickness: 2, height: 2),
             ),
-            _totalRow(modeStats),
-            // Only meaningful on the two-player tab; the P1 assumption does
-            // not apply to VS CPU games.
-            if (_selectedMode == GameModes.twoPlayer) ...[
-              const SizedBox(height: 14),
-              const Text(
-                'In two-player games, your record is tracked as Player 1.',
-                style: AppTheme.muted,
+            const SizedBox(height: 12),
+            _modeTabs(),
+            const SizedBox(height: 14),
+            // Per-mode: a streak can never span modes, because every route back
+            // to the Main screen (the only place the mode can be changed) calls
+            // restartGame(true), which zeroes the streak counters.
+            _milestonePanel(bestStreak),
+            const SizedBox(height: 14),
+            if (loading)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 30),
+                child: Center(child: CircularProgressIndicator(color: cyan)),
+              )
+            else ...[
+              _statsHeaderRow(),
+              const SizedBox(height: 6),
+              _statsRow('Easy', Difficulties.easy, modeStats, green),
+              _statsRow('Medium', Difficulties.medium, modeStats, yellow),
+              _statsRow('Hard', Difficulties.hard, modeStats, lightRed),
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: Divider(color: lightGrey, thickness: 2, height: 2),
               ),
+              _totalRow(modeStats),
+              // Only meaningful on the two-player tab; the P1 assumption does
+              // not apply to VS CPU games.
+              if (_selectedMode == GameModes.twoPlayer) ...[
+                const SizedBox(height: 14),
+                const Text(
+                  'In two-player games, your record is tracked as Player 1.',
+                  style: AppTheme.muted,
+                ),
+              ],
             ],
           ],
-        ],
+        ),
       ),
     );
   }
@@ -314,9 +316,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
       decoration: BoxDecoration(
         color: reached ? lightBlueColor : imageBg,
-        borderRadius: const BorderRadius.all(
-          Radius.circular(AppTheme.radius),
-        ),
+        borderRadius: const BorderRadius.all(Radius.circular(AppTheme.radius)),
         border: Border.all(
           color: reached ? cyan : lightGrey,
           width: AppTheme.panelBorderWidth,
@@ -438,12 +438,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _statsRow(
-    String label,
-    String key,
-    ModeStats stats,
-    Color accent,
-  ) {
+  Widget _statsRow(String label, String key, ModeStats stats, Color accent) {
     final rate = stats.winRate(key);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 5),
@@ -544,6 +539,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
         String? error;
         return StatefulBuilder(
           builder: (dialogContext, setDialogState) {
+            // Shared by the Save button and the keyboard's done action, so
+            // the user can submit without reaching past the keyboard.
+            Future<void> submit() async {
+              if (saving) return;
+              setDialogState(() {
+                saving = true;
+                error = null;
+              });
+              final outcome = await context
+                  .read<AuthService>()
+                  .updateDisplayName(controller.text);
+              if (!dialogContext.mounted) return;
+              if (outcome.isSuccess) {
+                Navigator.of(dialogContext).pop();
+                return;
+              }
+              // Keep the user on the edit dialog with their text intact
+              // rather than discarding it.
+              setDialogState(() {
+                saving = false;
+                error = outcome.message ?? 'Your name could not be saved.';
+              });
+            }
+
             return AppTheme.dialog(
               context: dialogContext,
               emoji: '✏️',
@@ -553,10 +572,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 TextField(
                   controller: controller,
                   maxLength: 30,
+                  autofocus: true,
+                  enabled: !saving,
                   textCapitalization: TextCapitalization.words,
+                  textInputAction: TextInputAction.done,
+                  onSubmitted: (_) => submit(),
                   style: AppTheme.body,
                   decoration: InputDecoration(
                     counterText: '',
+                    isDense: true,
                     hintText: 'Your display name',
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(
@@ -601,29 +625,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       child: AppTheme.dialogButton(
                         label: saving ? 'Saving…' : 'Save',
                         color: blue,
-                        onTap: saving
-                            ? null
-                            : () async {
-                                setDialogState(() {
-                                  saving = true;
-                                  error = null;
-                                });
-                                final outcome = await context
-                                    .read<AuthService>()
-                                    .updateDisplayName(controller.text);
-                                if (!dialogContext.mounted) return;
-                                if (outcome.isSuccess) {
-                                  Navigator.of(dialogContext).pop();
-                                  return;
-                                }
-                                // Keep the user on the edit dialog with their
-                                // text intact rather than discarding it.
-                                setDialogState(() {
-                                  saving = false;
-                                  error = outcome.message ??
-                                      'Your name could not be saved.';
-                                });
-                              },
+                        onTap: saving ? null : submit,
                       ),
                     ),
                   ],
