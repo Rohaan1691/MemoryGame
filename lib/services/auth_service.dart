@@ -74,15 +74,21 @@ class AuthService extends ChangeNotifier {
 
   /// Whether Sign in with Apple can be offered.
   ///
-  /// Apple sign-in is supported on BOTH platforms: iOS uses the native sheet,
-  /// Android uses the package's browser-based flow. So the only conditions are
-  /// that the plugin reports support and that the Services ID / redirect URI
-  /// are configured — the browser flow cannot be constructed without them.
+  /// Two conditions, both required:
+  ///  * the plugin reports support, and
+  ///  * we are actually on an Apple platform.
   ///
-  /// Note SignInWithApple.isAvailable() returns true on Android only once the
-  /// SignInWithAppleCallback activity is present in AndroidManifest.xml, since
-  /// that is what lets the browser hand control back to the app.
-  bool get isAppleAvailable => _appleAvailable && isAppleConfigured;
+  /// The second check is not redundant. SignInWithApple.isAvailable() returns
+  /// TRUE on Android whenever the package's browser-based flow could run, so
+  /// without this guard the button would render on Android — where Apple
+  /// sign-in is deliberately not offered.
+  bool get isAppleAvailable => _appleAvailable && _isApplePlatform;
+
+  /// True only on iOS/macOS, where the native Sign in with Apple sheet exists.
+  static bool get _isApplePlatform =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.iOS ||
+          defaultTargetPlatform == TargetPlatform.macOS);
 
   User? get currentUser => _auth.currentUser;
 
@@ -174,9 +180,7 @@ class AuthService extends ChangeNotifier {
           'Google sign-in returned a null idToken',
           name: 'AuthService',
         );
-        return const AuthOutcome.failure(
-          'Sign-in failed, please try again.',
-        );
+        return const AuthOutcome.failure('Sign-in failed, please try again.');
       }
 
       // 7.x exposes only idToken on `authentication`; the access token lives on
@@ -286,19 +290,15 @@ class AuthService extends ChangeNotifier {
     final rawNonce = _generateRawNonce();
     final hashedNonce = _sha256OfString(rawNonce);
 
-    // webAuthenticationOptions is REQUIRED on Android (and web), where the
-    // flow runs in a browser. It is ignored on iOS, which uses the native
-    // sheet, so it is safe to pass unconditionally.
+    // No webAuthenticationOptions: that parameter exists only for the
+    // browser-based Android/web flow, which this app does not offer. On iOS
+    // this uses the native sheet, which needs no Services ID or redirect URI.
     final appleCredential = await SignInWithApple.getAppleIDCredential(
       scopes: const [
         AppleIDAuthorizationScopes.email,
         AppleIDAuthorizationScopes.fullName,
       ],
       nonce: hashedNonce,
-      webAuthenticationOptions: WebAuthenticationOptions(
-        clientId: appleServicesId,
-        redirectUri: Uri.parse(appleRedirectUri),
-      ),
     );
 
     final identityToken = appleCredential.identityToken;
@@ -310,10 +310,9 @@ class AuthService extends ChangeNotifier {
       return null;
     }
 
-    final oauthCredential = OAuthProvider('apple.com').credential(
-      idToken: identityToken,
-      rawNonce: rawNonce,
-    );
+    final oauthCredential = OAuthProvider(
+      'apple.com',
+    ).credential(idToken: identityToken, rawNonce: rawNonce);
     return (credential: oauthCredential, raw: appleCredential);
   }
 
@@ -345,16 +344,18 @@ class AuthService extends ChangeNotifier {
   Future<AuthOutcome> signInWithApple() async {
     if (_isBusy) return const AuthOutcome.cancelled();
 
-    // Hard stop before touching the plugin. Without a Services ID / redirect
-    // URI the Android browser flow cannot be constructed and the package
-    // throws a plain Exception that no typed catch would match.
-    if (!isAppleConfigured) {
+    // Hard stop before touching the plugin. On a non-Apple platform the
+    // package would take its browser-based path, which this app does not
+    // configure, and throw a plain Exception that no typed catch would match.
+    // Reachable via reauthenticate(), which does not go through the login
+    // screen's visibility check.
+    if (!_isApplePlatform) {
       developer.log(
-        'Apple sign-in attempted without appleServicesId/appleRedirectUri',
+        'Apple sign-in attempted on a non-Apple platform; it is iOS-only here',
         name: 'AuthService',
       );
       return const AuthOutcome.failure(
-        'Sign in with Apple is not available yet.',
+        'Sign in with Apple is not available on this device.',
       );
     }
 
@@ -589,9 +590,7 @@ class AuthService extends ChangeNotifier {
 
     _setBusy(true);
     try {
-      final isApple = user.providerData.any(
-        (p) => p.providerId == 'apple.com',
-      );
+      final isApple = user.providerData.any((p) => p.providerId == 'apple.com');
 
       // 1. Revoke the Apple token first. Required by Apple; deleting the
       //    Firebase user alone is not sufficient.
@@ -711,13 +710,13 @@ class AuthService extends ChangeNotifier {
     final uidBefore = user.uid;
     final isApple = user.providerData.any((p) => p.providerId == 'apple.com');
 
-    if (isApple && !isAppleConfigured) {
+    if (isApple && !_isApplePlatform) {
       developer.log(
-        'Apple re-authentication attempted without Apple configuration',
+        'Apple re-authentication attempted on a non-Apple platform',
         name: 'AuthService',
       );
       return const AuthOutcome.failure(
-        'Sign in with Apple is not available yet.',
+        'Sign in with Apple is not available on this device.',
       );
     }
 
@@ -981,9 +980,6 @@ class AuthService extends ChangeNotifier {
   /// which also extends PlatformException and would otherwise be swallowed by
   /// a `on PlatformException` clause placed earlier.
   ///
-  /// Android reaches cases iOS never does: the flow runs in a Custom Tab, and
-  /// the plugin's Kotlin side raises MISSING_ACTIVITY, MISSING_ARG and
-  /// NEW_REQUEST, none of which the platform interface maps to a typed error.
   AuthOutcome _outcomeForAppleException(
     SignInWithAppleException e,
     StackTrace st, {
@@ -991,16 +987,8 @@ class AuthService extends ChangeNotifier {
   }) {
     if (e is SignInWithAppleAuthorizationException) {
       if (e.code == AuthorizationErrorCode.canceled) {
-        // iOS: sheet dismissed. Android: Custom Tab closed. Show nothing.
-        //
-        // NOTE: on Android a misconfigured Services ID or Return URL also
-        // lands here — Apple renders an error page in the browser and the
-        // user closes it, which is indistinguishable from a deliberate
-        // cancel. Logged so it is at least diagnosable.
-        developer.log(
-          'Apple $phase cancelled (sheet dismissed or Custom Tab closed)',
-          name: 'AuthService',
-        );
+        // User dismissed the native sheet. Show nothing at all.
+        developer.log('Apple $phase cancelled by user', name: 'AuthService');
         return const AuthOutcome.cancelled();
       }
       developer.log(
@@ -1014,8 +1002,6 @@ class AuthService extends ChangeNotifier {
     }
 
     if (e is SignInWithAppleNotSupportedException) {
-      // Android: no browser able to handle the Custom Tab, or the
-      // SignInWithAppleCallback activity is missing from the manifest.
       developer.log(
         'SignInWithAppleNotSupportedException during $phase: ${e.message}',
         name: 'AuthService',
@@ -1039,40 +1025,17 @@ class AuthService extends ChangeNotifier {
     }
 
     if (e is UnknownSignInWithAppleException) {
-      switch (e.code) {
-        case 'NEW_REQUEST':
-          // The plugin superseded this request with a newer one and cancelled
-          // this one itself. Not a failure — surfacing an error here would be
-          // a spurious dialog while the newer request is still running.
-          developer.log(
-            'Apple $phase superseded by a newer request; treating as cancelled',
-            name: 'AuthService',
-          );
-          return const AuthOutcome.cancelled();
-        case 'MISSING_ACTIVITY':
-        case 'MISSING_ARG':
-          // Plugin/host wiring problem rather than anything the user did.
-          developer.log(
-            'Apple $phase plugin error: code=${e.code} message=${e.message}',
-            name: 'AuthService',
-            error: e,
-            stackTrace: st,
-          );
-          return const AuthOutcome.failure(
-            'Sign-in failed, please try again.',
-          );
-        default:
-          developer.log(
-            'UnknownSignInWithAppleException during $phase: '
-            'code=${e.code} message=${e.message}',
-            name: 'AuthService',
-            error: e,
-            stackTrace: st,
-          );
-          return const AuthOutcome.failure(
-            'Sign-in failed, please try again.',
-          );
-      }
+      // Any plugin error the platform interface could not map to a typed
+      // exception. Kept as a catch-all so nothing reaches the user as a dead
+      // button; the code is logged for diagnosis.
+      developer.log(
+        'UnknownSignInWithAppleException during $phase: '
+        'code=${e.code} message=${e.message}',
+        name: 'AuthService',
+        error: e,
+        stackTrace: st,
+      );
+      return const AuthOutcome.failure('Sign-in failed, please try again.');
     }
 
     developer.log(
