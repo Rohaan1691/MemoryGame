@@ -97,11 +97,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       child: _statsPanel(
                         stats: stats,
                         loading: loading,
-                        // Per-mode best streak for whichever tab is selected.
-                        bestStreak: ProfileService.bestStreakFor(
-                          data,
-                          _selectedMode,
-                        ),
+                        // Raw document: the table needs a per-difficulty best
+                        // streak for each row, not just the mode total.
+                        data: data,
                       ),
                     ),
                   ],
@@ -241,10 +239,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget _statsPanel({
     required ProfileStats stats,
     required bool loading,
-    required int bestStreak,
+    required Map<String, dynamic>? data,
   }) {
     // Scoped view of whichever tab is selected.
     final modeStats = stats.mode(_selectedMode);
+
+    int streakFor(String difficulty) =>
+        ProfileService.bestStreakFor(data, _selectedMode, difficulty);
+
+    final bestStreak = ProfileService.bestStreakForMode(data, _selectedMode);
+    final bestDifficulty = ProfileService.bestStreakDifficultyFor(
+      data,
+      _selectedMode,
+    );
+    // Live run: drives the progress bar, and drops back to zero on a loss.
+    final currentStreak = ProfileService.currentStreakFor(data, _selectedMode);
 
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
@@ -262,14 +271,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 fontWeight: FontWeight.bold,
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             _modeTabs(),
-            const SizedBox(height: 14),
-            // Per-mode: a streak can never span modes, because every route back
-            // to the Main screen (the only place the mode can be changed) calls
-            // restartGame(true), which zeroes the streak counters.
-            _milestonePanel(bestStreak),
-            const SizedBox(height: 14),
+            const SizedBox(height: 10),
+            // Per mode. A run may span difficulties, so bestDifficulty is
+            // where the record was set, not a boundary the run sat inside.
+            _milestonePanel(bestStreak, bestDifficulty, currentStreak),
+            const SizedBox(height: 10),
             if (loading)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 30),
@@ -278,14 +286,33 @@ class _ProfileScreenState extends State<ProfileScreen> {
             else ...[
               _statsHeaderRow(),
               const SizedBox(height: 6),
-              _statsRow('Easy', Difficulties.easy, modeStats, green),
-              _statsRow('Medium', Difficulties.medium, modeStats, yellow),
-              _statsRow('Hard', Difficulties.hard, modeStats, lightRed),
+              _statsRow(
+                'Easy',
+                Difficulties.easy,
+                modeStats,
+                green,
+                streakFor(Difficulties.easy),
+              ),
+              _statsRow(
+                'Medium',
+                Difficulties.medium,
+                modeStats,
+                yellow,
+                streakFor(Difficulties.medium),
+              ),
+              _statsRow(
+                'Hard',
+                Difficulties.hard,
+                modeStats,
+                lightRed,
+                streakFor(Difficulties.hard),
+              ),
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 8),
                 child: Divider(color: lightGrey, thickness: 2, height: 2),
               ),
-              _totalRow(modeStats),
+              // Total streak is the MAX of the three, not a sum.
+              _totalRow(modeStats, bestStreak),
               // Only meaningful on the two-player tab; the P1 assumption does
               // not apply to VS CPU games.
               if (_selectedMode == GameModes.twoPlayer) ...[
@@ -302,18 +329,36 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  /// Highest win-streak milestone reached in the SELECTED mode.
+  /// Rank card for the SELECTED mode: current rank and the difficulty it was
+  /// earned at, the best streak, and progress toward the next rank.
   ///
-  /// VS CPU and two-player keep separate records: switching mode is only
-  /// possible via the Main screen, and every route back there calls
-  /// restartGame(true), which zeroes the streak counters. A run therefore
-  /// always belongs to exactly one mode.
-  Widget _milestonePanel(int bestStreak) {
+  /// VS CPU and two-player keep entirely separate records. Within a mode a run
+  /// may span difficulties, so [bestDifficulty] names where the record was set
+  /// rather than a boundary the run stayed inside.
+  ///
+  /// [bestStreak] is the all-time record and sets the earned rank — a loss
+  /// never demotes you. [currentStreak] is the live run and drives the
+  /// progress bar, so losing visibly resets it. Both come from Firestore, not
+  /// from the game provider, so they survive leaving the game screen.
+  Widget _milestonePanel(
+    int bestStreak,
+    String? bestDifficulty,
+    int currentStreak,
+  ) {
     final milestone = Milestones.highestFor(bestStreak);
     final reached = milestone != null;
+    final next = Milestones.nextFor(bestStreak);
+    // Progress toward the next rank is measured from the live run, clamped so
+    // a stale value can never overflow the bar.
+    final progress = next == null
+        ? 0.0
+        : (currentStreak / next.at).clamp(0.0, 1.0);
+    final remaining = next == null
+        ? 0
+        : (next.at - currentStreak).clamp(0, next.at);
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
       decoration: BoxDecoration(
         color: reached ? lightBlueColor : imageBg,
         borderRadius: const BorderRadius.all(Radius.circular(AppTheme.radius)),
@@ -322,37 +367,169 @@ class _ProfileScreenState extends State<ProfileScreen> {
           width: AppTheme.panelBorderWidth,
         ),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            reached ? milestone.icon : '🏅',
-            style: const TextStyle(fontSize: 30),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
+          // Rank title + the difficulty the streak was earned at.
+          Row(
+            children: [
+              Text(
+                reached ? milestone.icon : '🏅',
+                style: const TextStyle(fontSize: 22),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
                   reached ? milestone.title : 'No milestone yet',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: reached ? blue : textColor,
-                    fontSize: 17,
+                    fontSize: 16,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
-                const SizedBox(height: 2),
+              ),
+              if (reached && bestDifficulty != null)
                 Text(
-                  reached
-                      ? 'Best streak: $bestStreak wins in a row'
-                      : 'Win ${Milestones.firstTier} in a row to earn your '
-                            'first milestone',
+                  '(${_difficultyLabel(bestDifficulty)} Level)',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: AppTheme.muted,
+                  style: const TextStyle(
+                    color: blue,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Left: the streak itself.
+                Expanded(
+                  flex: 4,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text(
+                        'Best streak:',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTheme.muted,
+                      ),
+                      const SizedBox(height: 2),
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          '🔥 $bestStreak',
+                          style: const TextStyle(
+                            color: black,
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      const Text(
+                        'wins in a row',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTheme.muted,
+                      ),
+                    ],
+                  ),
+                ),
+                const VerticalDivider(
+                  color: lightGrey,
+                  thickness: 2,
+                  width: 20,
+                ),
+                // Right: next rank and progress toward it.
+                Expanded(
+                  flex: 6,
+                  child: next == null
+                      ? const Center(
+                          child: Text(
+                            '🌍 Highest rank reached',
+                            style: TextStyle(
+                              color: blue,
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        )
+                      : Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Text('Next rank:', style: AppTheme.muted),
+                            const SizedBox(height: 2),
+                            Row(
+                              children: [
+                                Text(
+                                  next.icon,
+                                  style: const TextStyle(fontSize: 18),
+                                ),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: Text(
+                                    next.title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: blue,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'Win $remaining more '
+                              '${remaining == 1 ? "game" : "games"}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppTheme.muted,
+                            ),
+                            const SizedBox(height: 6),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: ClipRRect(
+                                    borderRadius: const BorderRadius.all(
+                                      Radius.circular(6),
+                                    ),
+                                    child: LinearProgressIndicator(
+                                      value: progress,
+                                      minHeight: 10,
+                                      backgroundColor: white,
+                                      valueColor:
+                                          const AlwaysStoppedAnimation<Color>(
+                                            green,
+                                          ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Text(
+                                  '$currentStreak / ${next.at}',
+                                  style: const TextStyle(
+                                    color: black,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
                 ),
               ],
             ),
@@ -360,6 +537,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ],
       ),
     );
+  }
+
+  static String _difficultyLabel(String difficulty) {
+    switch (difficulty) {
+      case Difficulties.medium:
+        return 'Medium';
+      case Difficulties.hard:
+        return 'Hard';
+      default:
+        return 'Easy';
+    }
   }
 
   /// Two tabs, styled with the same palette and shape language as the Main and
@@ -419,29 +607,39 @@ class _ProfileScreenState extends State<ProfileScreen> {
       fontSize: 13,
       fontWeight: FontWeight.bold,
     );
+    // scaleDown rather than ellipsis: five columns in a landscape half-panel
+    // is tight, and "Win streak" is the longest label. Shrinking keeps the
+    // header readable where clipping to "Win stre…" would not.
+    Widget cell(String label) => Expanded(
+      flex: 2,
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Text(label, textAlign: TextAlign.center, style: style),
+      ),
+    );
+
     return Row(
-      children: const [
-        Expanded(flex: 3, child: Text('', style: style)),
-        Expanded(
-          flex: 2,
-          child: Text('Wins', textAlign: TextAlign.center, style: style),
-        ),
-        Expanded(
-          flex: 2,
-          child: Text('Losses', textAlign: TextAlign.center, style: style),
-        ),
-        Expanded(
-          flex: 2,
-          child: Text('Win rate', textAlign: TextAlign.center, style: style),
-        ),
+      children: [
+        const Expanded(flex: 3, child: Text('', style: style)),
+        cell('Wins'),
+        cell('Losses'),
+        cell('Win rate'),
+        cell('Win streak'),
       ],
     );
   }
 
-  Widget _statsRow(String label, String key, ModeStats stats, Color accent) {
+  Widget _statsRow(
+    String label,
+    String key,
+    ModeStats stats,
+    Color accent,
+    int streak,
+  ) {
     final rate = stats.winRate(key);
+    final played = stats.played(key);
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5),
+      padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(
         children: [
           Expanded(
@@ -459,12 +657,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
           Expanded(flex: 2, child: _numberCell('${stats.losses(key)}')),
           // Dash rather than NaN when no games have been played yet.
           Expanded(flex: 2, child: _numberCell(rate == null ? '—' : '$rate%')),
+          // Same treatment for the streak: a dash when this difficulty has
+          // never been played, rather than a misleading 0.
+          Expanded(flex: 2, child: _numberCell(played == 0 ? '—' : '$streak')),
         ],
       ),
     );
   }
 
-  Widget _totalRow(ModeStats stats) {
+  Widget _totalRow(ModeStats stats, int bestStreak) {
     final rate = stats.totalWinRate;
     return Row(
       children: [
@@ -487,6 +688,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
         Expanded(
           flex: 2,
           child: _numberCell(rate == null ? '—' : '$rate%', bold: true),
+        ),
+        Expanded(
+          flex: 2,
+          child: _numberCell(
+            stats.totalPlayed == 0 ? '—' : '$bestStreak',
+            bold: true,
+          ),
         ),
       ],
     );

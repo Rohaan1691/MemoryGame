@@ -73,31 +73,105 @@ class ProfileService {
       },
   };
 
-  /// Best win streak per mode, zeroed at document creation.
+  /// Best win streak per mode AND difficulty, zeroed at document creation.
   ///
-  /// Streaks are per mode in practice: changing mode is only possible via the
-  /// Main screen, and every route back there calls restartGame(true), which
-  /// zeroes the streak counters. A run of consecutive wins therefore always
-  /// belongs to exactly one mode.
+  /// A run can span difficulties, so the peak of a run is recorded against
+  /// whichever difficulty was being played at the moment it was reached. The
+  /// headline figure is therefore always a MAX across difficulties
+  /// ([bestStreakForMode]), never a sum — that max is exactly the true
+  /// lifetime best, since every new peak is written as it happens.
   static Map<String, dynamic> _zeroedBestStreak() => <String, dynamic>{
+    for (final mode in GameModes.all)
+      mode: <String, dynamic>{for (final d in Difficulties.all) d: 0},
+  };
+
+  /// The streak currently in progress, per mode.
+  ///
+  /// Deliberately NOT per difficulty: this counts consecutive wins in a mode
+  /// regardless of which difficulty each was played on, so a run continues
+  /// when the player switches difficulty. Splitting it per difficulty would
+  /// leave stale non-zero values on the ones not being played.
+  ///
+  /// Maintained entirely by [recordResult] via a server-side increment; the
+  /// game provider's in-memory streak is separate and resets per session.
+  static Map<String, dynamic> _zeroedCurrentStreak() => <String, dynamic>{
     for (final mode in GameModes.all) mode: 0,
   };
 
-  /// Reads the best streak for [mode] out of a profile document, tolerating
-  /// the pre-split shape where `bestStreak` was a single integer.
-  static int bestStreakFor(Map<String, dynamic>? data, String mode) {
-    final raw = data?['bestStreak'];
+  /// Live streak for [mode]. Absent reads as 0, so no migration is needed for
+  /// documents created before this field existed.
+  static int currentStreakFor(Map<String, dynamic>? data, String mode) {
+    final raw = data?['currentStreak'];
     if (raw is Map) {
       final value = raw[mode];
-      return value is num ? value.toInt() : 0;
-    }
-    // Legacy single-int shape: it could only have come from VS CPU or
-    // two-player play, and mode was not recorded. Attribute it to VS CPU,
-    // matching how legacy stats are migrated.
-    if (raw is num) {
-      return mode == GameModes.vsCpu ? raw.toInt() : 0;
+      if (value is num) return value.toInt();
     }
     return 0;
+  }
+
+  /// Best streak for one [mode] + [difficulty].
+  ///
+  /// Tolerates both older shapes: a bare integer (before modes existed) and
+  /// mode -> int (before difficulties existed). Both are attributed the same
+  /// way the lazy migration attributes them, so the UI reads correctly even
+  /// before the write-back lands.
+  static int bestStreakFor(
+    Map<String, dynamic>? data,
+    String mode,
+    String difficulty,
+  ) {
+    final raw = data?['bestStreak'];
+
+    // Current shape: mode -> difficulty -> int.
+    if (raw is Map && raw[mode] is Map) {
+      final value = (raw[mode] as Map)[difficulty];
+      return value is num ? value.toInt() : 0;
+    }
+
+    // Second shape: mode -> int. Difficulty was not recorded, so attribute it
+    // to Easy.
+    if (raw is Map && raw[mode] is num) {
+      return difficulty == Difficulties.easy ? (raw[mode] as num).toInt() : 0;
+    }
+
+    // Original shape: a single int, from before modes existed either.
+    if (raw is num) {
+      return (mode == GameModes.vsCpu && difficulty == Difficulties.easy)
+          ? raw.toInt()
+          : 0;
+    }
+
+    return 0;
+  }
+
+  /// Best streak across all difficulties of [mode] — the headline figure and
+  /// the value the Total row shows. It is a MAX, never a sum: a streak cannot
+  /// span difficulties.
+  static int bestStreakForMode(Map<String, dynamic>? data, String mode) {
+    var best = 0;
+    for (final d in Difficulties.all) {
+      final value = bestStreakFor(data, mode, d);
+      if (value > best) best = value;
+    }
+    return best;
+  }
+
+  /// Which difficulty holds [mode]'s best streak, or null when there is none.
+  /// Ties resolve in Easy -> Medium -> Hard order.
+  static String? bestStreakDifficultyFor(
+    Map<String, dynamic>? data,
+    String mode,
+  ) {
+    String? winner;
+    var best = 0;
+    for (final d in Difficulties.all) {
+      final value = bestStreakFor(data, mode, d);
+      if (value > best) {
+        best = value;
+        winner = d;
+      }
+    }
+    return winner;
   }
 
   // -------------------------------------------------------------- migration
@@ -152,11 +226,56 @@ class ProfileService {
     };
   }
 
+  /// True when `bestStreak` predates the difficulty split: either a bare int
+  /// (oldest) or mode -> int (second shape). Both are recognised by the value
+  /// under a mode NOT being a map.
+  static bool _isLegacyBestStreak(Object? raw) {
+    if (raw is num) return true;
+    if (raw is Map) {
+      return GameModes.all.any((mode) => raw[mode] is num);
+    }
+    return false;
+  }
+
   /// True when the document still carries any pre-split shape:
-  /// six-counter `stats`, or `bestStreak` as a single integer.
+  /// six-counter `stats`, or a `bestStreak` without difficulty keys.
   static bool _needsMigration(Map<String, dynamic> data) =>
       _isLegacyStats(data['stats'] as Map<String, dynamic>?) ||
-      data['bestStreak'] is num;
+      _isLegacyBestStreak(data['bestStreak']);
+
+  /// Converts any older `bestStreak` shape to mode -> difficulty -> int.
+  ///
+  /// Pre-difficulty values are attributed to Easy, since the difficulty they
+  /// were earned at was never recorded. Where a value already exists under the
+  /// new shape the LARGER of the two is kept — streaks are maxima, so adding
+  /// them would be meaningless.
+  static Map<String, dynamic> migrateLegacyBestStreak(Object? raw) {
+    int legacyValueFor(String mode) {
+      if (raw is num) return mode == GameModes.vsCpu ? raw.toInt() : 0;
+      if (raw is Map && raw[mode] is num) return (raw[mode] as num).toInt();
+      return 0;
+    }
+
+    int existingValue(String mode, String difficulty) {
+      if (raw is Map && raw[mode] is Map) {
+        final value = (raw[mode] as Map)[difficulty];
+        if (value is num) return value.toInt();
+      }
+      return 0;
+    }
+
+    return <String, dynamic>{
+      for (final mode in GameModes.all)
+        mode: <String, dynamic>{
+          for (final d in Difficulties.all)
+            d: d == Difficulties.easy
+                ? (existingValue(mode, d) > legacyValueFor(mode)
+                      ? existingValue(mode, d)
+                      : legacyValueFor(mode))
+                : existingValue(mode, d),
+        },
+    };
+  }
 
   /// The fields that must be rewritten to bring a document up to date.
   /// Only the keys that actually need changing are included.
@@ -169,11 +288,8 @@ class ProfileService {
     }
 
     final bestStreak = data['bestStreak'];
-    if (bestStreak is num) {
-      out['bestStreak'] = <String, dynamic>{
-        GameModes.vsCpu: bestStreak.toInt(),
-        GameModes.twoPlayer: 0,
-      };
+    if (_isLegacyBestStreak(bestStreak)) {
+      out['bestStreak'] = migrateLegacyBestStreak(bestStreak);
     }
 
     return out;
@@ -284,6 +400,7 @@ class ProfileService {
           'createdAt': FieldValue.serverTimestamp(),
           'updatedAt': FieldValue.serverTimestamp(),
           'bestStreak': _zeroedBestStreak(),
+          'currentStreak': _zeroedCurrentStreak(),
           'stats': _zeroedStats(),
         });
         return;
@@ -318,13 +435,13 @@ class ProfileService {
   /// reconnect, so transient failures usually resolve themselves.
   ///
   /// Returns silently when nobody is signed in.
-  /// [currentStreak] is the signed-in player's consecutive-win count AFTER
-  /// this game, used to maintain `bestStreak`. Ignored on a loss.
+  ///
+  /// The consecutive-win count is derived from the stored value, not passed in
+  /// by the caller — see the `currentStreak` note on the payload below.
   Future<void> recordResult({
     required bool isVsCpu,
     required String difficulty,
     required bool won,
-    int currentStreak = 0,
   }) async {
     final user = _auth.currentUser;
     if (user == null) return;
@@ -344,12 +461,24 @@ class ProfileService {
     // Dot-path + increment: atomic server-side, and safe to queue offline.
     final payload = <String, dynamic>{
       field: FieldValue.increment(1),
+      // Live streak, maintained SERVER-SIDE rather than from the in-memory
+      // counter. The game provider zeroes its streak on every route back to
+      // the Main screen, so reading it here would end a run merely because
+      // the player opened their profile. Incrementing the stored value
+      // instead makes this a true consecutive-win count that survives
+      // navigation, app restarts and reinstalls.
+      //
+      // Written in the SAME update as the win/loss counter, so the two can
+      // never disagree and both survive being queued offline.
+      'currentStreak.$mode': won ? FieldValue.increment(1) : 0,
       'updatedAt': FieldValue.serverTimestamp(),
     };
 
     try {
       await ref.update(payload);
-      if (won) await _maybeUpdateBestStreak(ref, mode, currentStreak);
+      if (won) {
+        await _maybeUpdateBestStreak(ref, mode, difficulty);
+      }
     } on FirebaseException catch (e, st) {
       if (e.code == 'not-found') {
         // Document missing (e.g. deleted on another device). Recreate the
@@ -363,10 +492,13 @@ class ProfileService {
             'createdAt': FieldValue.serverTimestamp(),
             'updatedAt': FieldValue.serverTimestamp(),
             'bestStreak': _zeroedBestStreak(),
-          'stats': _zeroedStats(),
+            'currentStreak': _zeroedCurrentStreak(),
+            'stats': _zeroedStats(),
           }, SetOptions(merge: true));
           await ref.update(payload);
-          if (won) await _maybeUpdateBestStreak(ref, mode, currentStreak);
+          if (won) {
+            await _maybeUpdateBestStreak(ref, mode, difficulty);
+          }
         } on FirebaseException catch (e2, st2) {
           developer.log(
             'recordResult retry failed: code=${e2.code} message=${e2.message}',
@@ -386,7 +518,7 @@ class ProfileService {
     }
   }
 
-  /// Raises `bestStreak` when [streak] beats the stored value.
+  /// Raises `bestStreak` when the run just extended beats the stored value.
   ///
   /// Firestore has no server-side "max", so this needs a read — hence a
   /// transaction rather than the dot-path increment used for the counters.
@@ -394,22 +526,46 @@ class ProfileService {
   /// win/loss write, this one is NOT queued offline. It is best-effort and
   /// catches up on the next win made while online.
   ///
+  /// The streak is read back from the document rather than passed in, so it
+  /// always reflects the increment recordResult just committed.
+  ///
   /// Never surfaces an error — a game ending must not interrupt the player.
   Future<void> _maybeUpdateBestStreak(
     DocumentReference<Map<String, dynamic>> ref,
     String mode,
-    int streak,
+    String difficulty,
   ) async {
-    if (streak <= 0) return;
     try {
       await _db.runTransaction((tx) async {
         final snap = await tx.get(ref);
         if (!snap.exists) return;
-        final current = bestStreakFor(snap.data(), mode);
+        final data = snap.data();
+
+        final streak = currentStreakFor(data, mode);
+        if (streak <= 0) return;
+
+        // A document still on an older shape must be brought forward in the
+        // same write, otherwise the dot-path below would create the nested
+        // map alongside the legacy value and strand it.
+        if (_isLegacyBestStreak(data?['bestStreak'])) {
+          final migrated = migrateLegacyBestStreak(data?['bestStreak']);
+          final existing =
+              ((migrated[mode] as Map)[difficulty] as num?)?.toInt() ?? 0;
+          if (streak > existing) {
+            (migrated[mode] as Map)[difficulty] = streak;
+          }
+          tx.update(ref, <String, dynamic>{
+            'bestStreak': migrated,
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+          return;
+        }
+
+        final current = bestStreakFor(data, mode, difficulty);
         if (streak <= current) return;
-        // Dot path so the other mode's record is untouched.
+        // Dot path so other modes and difficulties are untouched.
         tx.update(ref, <String, dynamic>{
-          'bestStreak.$mode': streak,
+          'bestStreak.$mode.$difficulty': streak,
           'updatedAt': FieldValue.serverTimestamp(),
         });
       });

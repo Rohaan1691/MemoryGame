@@ -58,4 +58,18 @@ class Milestones {
 
   /// Wins needed for the very first milestone, used for the empty state.
   static int get firstTier => all.last.at;
+
+  /// The next milestone strictly above [streak], or null once the highest tier
+  /// has been reached.
+  ///
+  /// [all] is ordered highest-first, so the last entry still above [streak] is
+  /// the nearest one — e.g. a streak of 10 (Flag Legend) returns Unstoppable
+  /// at 15, not World Champion at 20.
+  static Milestone? nextFor(int streak) {
+    Milestone? next;
+    for (final milestone in all) {
+      if (milestone.at > streak) next = milestone;
+    }
+    return next;
+  }
 }

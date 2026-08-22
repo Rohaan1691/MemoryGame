@@ -72,9 +72,10 @@ class _GameScreenState extends State<GameScreen>
         isVsCpu: provider.isVsCpu,
         difficulty: difficulty,
         won: player1Won,
-        // Already incremented above by checkGameCompleted before this call.
-        // Read only — streak computation and resets are unchanged.
-        currentStreak: provider.player1WinStreak,
+        // No streak argument: the profile's streak is maintained server-side.
+        // provider.player1WinStreak is per-session and is zeroed by every
+        // restartGame(true), so passing it would end a run whenever the player
+        // returned to the Menu. Game-side streak logic is untouched.
       ),
     );
   }
