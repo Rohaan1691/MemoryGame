@@ -247,13 +247,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
     int streakFor(String difficulty) =>
         ProfileService.bestStreakFor(data, _selectedMode, difficulty);
 
+    // Headline: the best milestone reached anywhere in this mode, whichever
+    // difficulty earned it. Deliberately not attributed to a difficulty — the
+    // per-difficulty figures are the table's job.
     final bestStreak = ProfileService.bestStreakForMode(data, _selectedMode);
-    final bestDifficulty = ProfileService.bestStreakDifficultyFor(
+    // Live run: drives the progress bar. Only one difficulty can hold a run at
+    // a time, so this is that run. Drops to zero on a loss, and switching
+    // difficulty ends it.
+    final currentStreak = ProfileService.currentStreakForMode(
       data,
       _selectedMode,
     );
-    // Live run: drives the progress bar, and drops back to zero on a loss.
-    final currentStreak = ProfileService.currentStreakFor(data, _selectedMode);
 
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
@@ -276,7 +280,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             const SizedBox(height: 10),
             // Per mode. A run may span difficulties, so bestDifficulty is
             // where the record was set, not a boundary the run sat inside.
-            _milestonePanel(bestStreak, bestDifficulty, currentStreak),
+            _milestonePanel(bestStreak, currentStreak),
             const SizedBox(height: 10),
             if (loading)
               const Padding(
@@ -329,27 +333,35 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  /// Rank card for the SELECTED mode: current rank and the difficulty it was
-  /// earned at, the best streak, and progress toward the next rank.
+  /// [streak] as a milestone figure for display: the tier it reached, or a
+  /// dash below the first tier. Never the raw running total — the profile
+  /// reports milestones (3, 5, 7, 10, 15, 20), not arbitrary numbers.
+  static String _milestoneLabel(int streak) {
+    final snapped = Milestones.snap(streak);
+    return snapped == 0 ? '—' : '$snapped';
+  }
+
+  /// Rank card for the SELECTED mode: the best milestone reached across every
+  /// difficulty, and progress toward the next one.
   ///
-  /// VS CPU and two-player keep entirely separate records. Within a mode a run
-  /// may span difficulties, so [bestDifficulty] names where the record was set
-  /// rather than a boundary the run stayed inside.
+  /// VS CPU and two-player keep entirely separate records. Within a mode this
+  /// card is deliberately difficulty-agnostic — per-difficulty figures belong
+  /// to the table below it.
   ///
-  /// [bestStreak] is the all-time record and sets the earned rank — a loss
-  /// never demotes you. [currentStreak] is the live run and drives the
-  /// progress bar, so losing visibly resets it. Both come from Firestore, not
-  /// from the game provider, so they survive leaving the game screen.
-  Widget _milestonePanel(
-    int bestStreak,
-    String? bestDifficulty,
-    int currentStreak,
-  ) {
+  /// [bestStreak] is the all-time record and sets the earned rank, so a loss
+  /// never demotes you. [currentStreak] is the live run: it drives the bar,
+  /// drops to zero on a loss, and ends when the player switches difficulty.
+  Widget _milestonePanel(int bestStreak, int currentStreak) {
     final milestone = Milestones.highestFor(bestStreak);
     final reached = milestone != null;
+    // The target is the milestone above the rank already EARNED, not above the
+    // live run. With Fire (3) earned and a run of 1, the goal is Lightning (5)
+    // — measuring from the run would point back at Fire, a rank already held.
+    //
+    // Null once the top tier is earned; the card shows "Highest rank reached"
+    // in place of the bar in that case.
     final next = Milestones.nextFor(bestStreak);
-    // Progress toward the next rank is measured from the live run, clamped so
-    // a stale value can never overflow the bar.
+    // Clamped so a stale value can never overflow the bar.
     final progress = next == null
         ? 0.0
         : (currentStreak / next.at).clamp(0.0, 1.0);
@@ -371,7 +383,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Rank title + the difficulty the streak was earned at.
+          // Rank title only. The difficulty is intentionally absent: this is
+          // the best across every difficulty in the mode, so naming one would
+          // misrepresent it.
           Row(
             children: [
               Text(
@@ -391,17 +405,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                 ),
               ),
-              if (reached && bestDifficulty != null)
-                Text(
-                  '(${_difficultyLabel(bestDifficulty)} Level)',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: blue,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
             ],
           ),
           const SizedBox(height: 6),
@@ -427,7 +430,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         fit: BoxFit.scaleDown,
                         alignment: Alignment.centerLeft,
                         child: Text(
-                          '🔥 $bestStreak',
+                          // A dash, not 0, below the first tier: the player may
+                          // well have won games, just not reached a milestone.
+                          '🔥 ${_milestoneLabel(bestStreak)}',
                           style: const TextStyle(
                             color: black,
                             fontSize: 20,
@@ -539,17 +544,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  static String _difficultyLabel(String difficulty) {
-    switch (difficulty) {
-      case Difficulties.medium:
-        return 'Medium';
-      case Difficulties.hard:
-        return 'Hard';
-      default:
-        return 'Easy';
-    }
-  }
-
   /// Two tabs, styled with the same palette and shape language as the Main and
   /// Difficulty screen buttons rather than a default Material TabBar.
   Widget _modeTabs() {
@@ -658,8 +652,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
           // Dash rather than NaN when no games have been played yet.
           Expanded(flex: 2, child: _numberCell(rate == null ? '—' : '$rate%')),
           // Same treatment for the streak: a dash when this difficulty has
-          // never been played, rather than a misleading 0.
-          Expanded(flex: 2, child: _numberCell(played == 0 ? '—' : '$streak')),
+          // never been played, rather than a misleading 0. Shown as the
+          // milestone reached, so it matches the rank card above.
+          Expanded(
+            flex: 2,
+            child: _numberCell(played == 0 ? '—' : _milestoneLabel(streak)),
+          ),
         ],
       ),
     );
@@ -692,7 +690,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         Expanded(
           flex: 2,
           child: _numberCell(
-            stats.totalPlayed == 0 ? '—' : '$bestStreak',
+            stats.totalPlayed == 0 ? '—' : _milestoneLabel(bestStreak),
             bold: true,
           ),
         ),

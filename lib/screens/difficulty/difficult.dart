@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:memorygame/network/routes.dart';
 import 'package:memorygame/providers/game_provider.dart';
+import 'package:memorygame/services/profile_service.dart';
 import 'package:memorygame/utils/app_utils.dart';
 import 'package:memorygame/utils/constants.dart';
 import 'package:memorygame/utils/custom_audios.dart';
@@ -18,6 +21,23 @@ class Difficulty extends StatefulWidget {
 }
 
 class _DifficultyState extends State<Difficulty> {
+  /// Ends any run on a different difficulty, so the profile's progress bar
+  /// resets as soon as the player switches rather than lagging behind until
+  /// their next game finishes.
+  ///
+  /// Additive: called alongside the existing setDifficultyMode calls and never
+  /// awaited, so it cannot delay or block starting a game.
+  void _endRunsOnOtherDifficulties(BuildContext context, int difficultyMode) {
+    final provider = Provider.of<GameProvider>(context, listen: false);
+    final profileService = Provider.of<ProfileService>(context, listen: false);
+    unawaited(
+      profileService.resetStreaksExcept(
+        isVsCpu: provider.isVsCpu,
+        difficulty: Difficulties.fromMode(difficultyMode),
+      ),
+    );
+  }
+
 
 
   final AudioPlayer _audioPlayer = AudioPlayer();
@@ -103,6 +123,7 @@ class _DifficultyState extends State<Difficulty> {
                         () async {
                           GameProvider provider = Provider.of<GameProvider>(context, listen: false);
                           provider.setDifficultyMode(1);
+                          _endRunsOnOtherDifficulties(context, 1);
                           if (provider.isSoundOn) {
                             await _audioPlayer.stop();
                             await _audioPlayer.play(AssetSource(CustomAudios.funClick));
@@ -120,6 +141,7 @@ class _DifficultyState extends State<Difficulty> {
                         () async {
                           GameProvider provider = Provider.of<GameProvider>(context, listen: false);
                           provider.setDifficultyMode(2);
+                          _endRunsOnOtherDifficulties(context, 2);
                           if (provider.isSoundOn) {
                             await _audioPlayer.stop();
                             await _audioPlayer.play(AssetSource(CustomAudios.funClick));
@@ -137,6 +159,7 @@ class _DifficultyState extends State<Difficulty> {
                         () async {
                           GameProvider provider = Provider.of<GameProvider>(context, listen: false);
                           provider.setDifficultyMode(3);
+                          _endRunsOnOtherDifficulties(context, 3);
                           if (provider.isSoundOn) {
                             await _audioPlayer.stop();
                             await _audioPlayer.play(AssetSource(CustomAudios.funClick));

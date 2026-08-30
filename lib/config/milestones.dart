@@ -59,6 +59,15 @@ class Milestones {
   /// Wins needed for the very first milestone, used for the empty state.
   static int get firstTier => all.last.at;
 
+  /// [streak] rounded DOWN to the milestone it reached, or 0 below the first
+  /// tier. Naturally caps at the highest tier, so 23 and 55 both give 20.
+  ///
+  /// Every streak figure shown on the profile is passed through this, so the
+  /// player only ever sees defined milestones (3, 5, 7, 10, 15, 20) and never
+  /// a raw running total. The one exception is the progress bar, which must
+  /// show the true count to move between milestones.
+  static int snap(int streak) => highestFor(streak)?.at ?? 0;
+
   /// The next milestone strictly above [streak], or null once the highest tier
   /// has been reached.
   ///

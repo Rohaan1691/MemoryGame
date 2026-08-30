@@ -85,28 +85,52 @@ class ProfileService {
       mode: <String, dynamic>{for (final d in Difficulties.all) d: 0},
   };
 
-  /// The streak currently in progress, per mode.
+  /// The streak currently in progress, per mode AND difficulty.
   ///
-  /// Deliberately NOT per difficulty: this counts consecutive wins in a mode
-  /// regardless of which difficulty each was played on, so a run continues
-  /// when the player switches difficulty. Splitting it per difficulty would
-  /// leave stale non-zero values on the ones not being played.
+  /// At most ONE difficulty per mode is ever non-zero: switching difficulty
+  /// ends the run, so starting or finishing a game on one difficulty zeroes
+  /// the others. That is what keeps a run on Easy from being credited to
+  /// Medium — the defect that let a 50-win Easy run show up as a Medium
+  /// record.
   ///
-  /// Maintained entirely by [recordResult] via a server-side increment; the
-  /// game provider's in-memory streak is separate and resets per session.
+  /// Maintained entirely by [recordResult] and [resetStreaksExcept]; the game
+  /// provider's in-memory streak is separate and resets per session.
   static Map<String, dynamic> _zeroedCurrentStreak() => <String, dynamic>{
-    for (final mode in GameModes.all) mode: 0,
+    for (final mode in GameModes.all)
+      mode: <String, dynamic>{for (final d in Difficulties.all) d: 0},
   };
 
-  /// Live streak for [mode]. Absent reads as 0, so no migration is needed for
-  /// documents created before this field existed.
-  static int currentStreakFor(Map<String, dynamic>? data, String mode) {
+  /// Live streak for one [mode] + [difficulty].
+  ///
+  /// Tolerates the earlier mode -> int shape, where the difficulty was not
+  /// recorded. Such a value is deliberately discarded rather than guessed at:
+  /// it was accumulated under the old cross-difficulty rule, so attributing it
+  /// to any single difficulty would recreate the very bug this replaces.
+  static int currentStreakFor(
+    Map<String, dynamic>? data,
+    String mode,
+    String difficulty,
+  ) {
     final raw = data?['currentStreak'];
-    if (raw is Map) {
-      final value = raw[mode];
+    if (raw is Map && raw[mode] is Map) {
+      final value = (raw[mode] as Map)[difficulty];
       if (value is num) return value.toInt();
     }
     return 0;
+  }
+
+  /// The live run for [mode], regardless of which difficulty it is on.
+  ///
+  /// Only one difficulty can be non-zero at a time, so this is that run. It
+  /// drives the progress bar, which is deliberately mode-level: the bar shows
+  /// the next milestone, not a per-difficulty figure.
+  static int currentStreakForMode(Map<String, dynamic>? data, String mode) {
+    var live = 0;
+    for (final d in Difficulties.all) {
+      final value = currentStreakFor(data, mode, d);
+      if (value > live) live = value;
+    }
+    return live;
   }
 
   /// Best streak for one [mode] + [difficulty].
@@ -156,23 +180,6 @@ class ProfileService {
     return best;
   }
 
-  /// Which difficulty holds [mode]'s best streak, or null when there is none.
-  /// Ties resolve in Easy -> Medium -> Hard order.
-  static String? bestStreakDifficultyFor(
-    Map<String, dynamic>? data,
-    String mode,
-  ) {
-    String? winner;
-    var best = 0;
-    for (final d in Difficulties.all) {
-      final value = bestStreakFor(data, mode, d);
-      if (value > best) {
-        best = value;
-        winner = d;
-      }
-    }
-    return winner;
-  }
 
   // -------------------------------------------------------------- migration
 
@@ -468,9 +475,13 @@ class ProfileService {
       // instead makes this a true consecutive-win count that survives
       // navigation, app restarts and reinstalls.
       //
-      // Written in the SAME update as the win/loss counter, so the two can
-      // never disagree and both survive being queued offline.
-      'currentStreak.$mode': won ? FieldValue.increment(1) : 0,
+      // Scoped to THIS difficulty, and the others are zeroed alongside it, so
+      // a run can never be credited to a difficulty it was not played on.
+      // Expressed as dot paths rather than a read-modify-write, so the whole
+      // thing stays atomic and offline-safe.
+      'currentStreak.$mode.$difficulty': won ? FieldValue.increment(1) : 0,
+      for (final other in Difficulties.all)
+        if (other != difficulty) 'currentStreak.$mode.$other': 0,
       'updatedAt': FieldValue.serverTimestamp(),
     };
 
@@ -518,6 +529,49 @@ class ProfileService {
     }
   }
 
+  /// Ends any run on a difficulty OTHER than [difficulty], for the given mode.
+  ///
+  /// Called when a difficulty is chosen, so the progress bar resets the moment
+  /// the player switches rather than lagging until their next game finishes.
+  /// Selecting the same difficulty again is harmless: it only rewrites zeroes
+  /// that are already zero.
+  ///
+  /// Deliberately does NOT touch [difficulty]'s own streak — re-entering the
+  /// difficulty you are already on must not end the run you are building.
+  ///
+  /// Fails silently: this is housekeeping, and must never block starting a
+  /// game. If the write is lost, the next recordResult zeroes the same fields
+  /// anyway, so the worst case is a briefly stale bar.
+  Future<void> resetStreaksExcept({
+    required bool isVsCpu,
+    required String difficulty,
+  }) async {
+    final user = _auth.currentUser;
+    if (user == null) return;
+    if (!Difficulties.all.contains(difficulty)) return;
+
+    final mode = GameModes.fromIsVsCpu(isVsCpu);
+    final payload = <String, dynamic>{
+      for (final other in Difficulties.all)
+        if (other != difficulty) 'currentStreak.$mode.$other': 0,
+    };
+    if (payload.isEmpty) return;
+
+    try {
+      await _userDoc(user.uid).update(payload);
+    } on FirebaseException catch (e, st) {
+      // 'not-found' is expected before the first game is ever recorded; there
+      // is no run to end in that case, so it needs no retry.
+      if (e.code == 'not-found') return;
+      developer.log(
+        'resetStreaksExcept failed: code=${e.code} message=${e.message}',
+        name: 'ProfileService',
+        error: e,
+        stackTrace: st,
+      );
+    }
+  }
+
   /// Raises `bestStreak` when the run just extended beats the stored value.
   ///
   /// Firestore has no server-side "max", so this needs a read — hence a
@@ -541,7 +595,9 @@ class ProfileService {
         if (!snap.exists) return;
         final data = snap.data();
 
-        final streak = currentStreakFor(data, mode);
+        // This difficulty's own run — never the mode-wide figure, so a record
+        // is only ever credited to the difficulty it was actually played on.
+        final streak = currentStreakFor(data, mode, difficulty);
         if (streak <= 0) return;
 
         // A document still on an older shape must be brought forward in the
